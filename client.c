@@ -8,7 +8,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
-int main(int argc,char *argv[]) {
+int main(int argc,char *argv[]) {   //usage: ./client host port
     int sockfd, numbytes;
     char buf[BUFSIZ];
     struct sockaddr_in their_addr;
@@ -16,8 +16,8 @@ int main(int argc,char *argv[]) {
     while((sockfd = socket(AF_INET,SOCK_STREAM,0)) == -1);
     puts("Get sockfd");
     their_addr.sin_family = AF_INET;
-    their_addr.sin_port = htons(8000);
-    their_addr.sin_addr.s_addr=inet_addr("127.0.0.1");
+    their_addr.sin_port = htons(atoi(argv[2]));
+    their_addr.sin_addr.s_addr=inet_addr(argv[1]);
     bzero(&(their_addr.sin_zero), 8);
     
     while(connect(sockfd,(struct sockaddr*)&their_addr,sizeof(struct sockaddr)) == -1);
