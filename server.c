@@ -177,6 +177,7 @@ int s5_list(int *s) {
     char *keys = calloc(size, DATASIZE);
     if(keys) {
         rewind(fp);
+        keys[0] = 0;
         while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
             u_char ks = dict.keysize;
             dict.key[ks] = 0;
