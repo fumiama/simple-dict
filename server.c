@@ -186,12 +186,14 @@ int main(int argc, char *argv[]) {
             int times = 0;
             sscanf(argv[2], "%d", &times);
             if(times > 0) {
-                fp = NULL;
-                fp = fopen(argv[3], "rb+");
-                if(!fp) fp = fopen(argv[3], "wb+");
-                if(fp) {
-                    if(bindServer(port, times)) if(listenSocket(times)) while(1) acceptClient();
-                } else fprintf(stderr, "Error opening dict file: %s\n", argv[3]);
+                if(daemon(1, 1) >= 0) {
+                    fp = NULL;
+                    fp = fopen(argv[3], "rb+");
+                    if(!fp) fp = fopen(argv[3], "wb+");
+                    if(fp) {
+                        if(bindServer(port, times)) if(listenSocket(times)) while(1) acceptClient();
+                    } else fprintf(stderr, "Error opening dict file: %s\n", argv[3]);
+                } else perror("Start daemon error");
             } else fprintf(stderr, "Error times: %d\n", times);
         } else fprintf(stderr, "Error port: %d\n", port);
     }
