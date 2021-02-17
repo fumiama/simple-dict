@@ -7,11 +7,25 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <pthread.h>
+
+int sockfd;
+char buf[BUFSIZ];
+char bufr[BUFSIZ];
+struct sockaddr_in their_addr;
+pthread_t thread;
+
+void getMessage(void *p) {
+    int c = 0;
+    while((c = recv(sockfd, bufr, BUFSIZ, 0)) > 0) {
+        printf("Recv %d bytes: ", c);
+        for(int i = 0; i < c; i++) putchar(bufr[i]);
+        putchar('\n');
+    }
+}
 
 int main(int argc,char *argv[]) {   //usage: ./client host port
-    int sockfd, numbytes;
-    char buf[BUFSIZ];
-    struct sockaddr_in their_addr;
+    ssize_t numbytes;
     puts("break!");
     while((sockfd = socket(AF_INET,SOCK_STREAM,0)) == -1);
     puts("Get sockfd");
@@ -25,14 +39,15 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
     numbytes = recv(sockfd, buf, BUFSIZ,0);
     buf[numbytes]='\0';  
     puts(buf);
-    while(1) {
-        printf("Enter command:");
-        scanf("%s",buf);
-        numbytes = send(sockfd, buf, strlen(buf), 0);
-        numbytes = recv(sockfd,buf,BUFSIZ,0);
-        buf[numbytes]='\0';
-        puts(buf);
-    }
+    if(!pthread_create(&thread, NULL, (void*)&getMessage, NULL)) {
+        puts("Thread create succeeded");
+        while(1) {
+            printf("Enter command:");
+            scanf("%s",buf);
+            numbytes = send(sockfd, buf, strlen(buf), 0);
+            sleep(1);
+        }
+    } else perror("Create msg thread failed");
     close(sockfd);
     return 0;
 }
