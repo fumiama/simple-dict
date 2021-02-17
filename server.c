@@ -264,12 +264,13 @@ void handle_quit(int signo) {
 
 void acceptTimer(void *p) {
     THREADTIMER *timer = (THREADTIMER*)p;
-    while(!pthread_kill(*(timer->thread), 0)) {
+    while(*timer->thread && !pthread_kill(*timer->thread, 0)) {
         sleep(MAXWAITSEC);
         puts("Check accept status");
         if(time(NULL) - timer->touch > MAXWAITSEC) {
-            pthread_kill(*(timer->thread), SIGQUIT);
+            pthread_kill(*timer->thread, SIGQUIT);
             close(timer->accept_fd);
+            *timer->thread = 0;
         }
     }
     free(p);
@@ -287,14 +288,14 @@ void handleAccept(void *p) {
         else puts("Creating timer thread succeeded");
         sendData(accept_fd, "Welcome to simple dict server.", 31);
         int s = -1;
-        while((numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
+        while(*((THREADTIMER*)p)->thread && (numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
             touchTimer(p);
             buff[numbytes] = 0;
             printf("Get %zd bytes: %s\n", numbytes, buff);
             puts("Check buffer");
             if(!checkBuffer(accept_fd, &s)) break;
         }
-        fprintf(stderr, "Recv %zd bytes\n", numbytes);
+        printf("Recv %zd bytes\n", numbytes);
         close(accept_fd);
     } else perror("Error accepting client");
 }
@@ -305,6 +306,7 @@ void acceptClient() {
         int p = 0;
         while(p < 8 && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
         if(p < 8) {
+            printf("Run on thread No.%d\n", p);
             THREADTIMER *timer = malloc(sizeof(THREADTIMER));
             timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
             timer->thread = &accept_threads[p];
