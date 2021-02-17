@@ -50,7 +50,7 @@ DICTBLK dict;
 void acceptClient();
 void acceptTimer(void *p);
 int bindServer(uint16_t port, u_int try_times);
-int checkBuffer(int accept_fd);
+int checkBuffer(int accept_fd, int *s);
 int closeDict(FILE *fp);
 off_t fileSize(const char* fname);
 void handleAccept(void *accept_fd_p);
@@ -243,17 +243,16 @@ int s5_list(int *s, int accept_fd) {
     } else return sendData(accept_fd, "erro", 4);
 }
 
-int checkBuffer(int accept_fd) {
-    static int s = -1;
-    printf("Status: %d\n", s);
-    switch(s) {
-        case -1: return sm1_pwd(&s, accept_fd); break;
-        case 0: return s0_init(&s, accept_fd); break;
-        case 1: return s1_get(&s, accept_fd); break;
-        case 2: return s2_set(&s, accept_fd); break;
-        case 3: return s3_setData(&s, accept_fd); break;
-        case 4: return s4_del(&s, accept_fd); break;
-        case 5: return s5_list(&s, accept_fd); break;
+int checkBuffer(int accept_fd, int *s) {
+    printf("Status: %d\n", *s);
+    switch(*s) {
+        case -1: return sm1_pwd(s, accept_fd); break;
+        case 0: return s0_init(s, accept_fd); break;
+        case 1: return s1_get(s, accept_fd); break;
+        case 2: return s2_set(s, accept_fd); break;
+        case 3: return s3_setData(s, accept_fd); break;
+        case 4: return s4_del(s, accept_fd); break;
+        case 5: return s5_list(s, accept_fd); break;
         default: return -1; break;
     }
 }
@@ -287,12 +286,13 @@ void handleAccept(void *p) {
         if (pthread_create(&thread, NULL, (void *)&acceptTimer, p)) perror("Error creating timer thread");
         else puts("Creating timer thread succeeded");
         sendData(accept_fd, "Welcome to simple dict server.", 31);
+        int s = -1;
         while((numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
             touchTimer(p);
             buff[numbytes] = 0;
             printf("Get %zd bytes: %s\n", numbytes, buff);
             puts("Check buffer");
-            if(!checkBuffer(accept_fd)) break;
+            if(!checkBuffer(accept_fd, &s)) break;
         }
         fprintf(stderr, "Recv %zd bytes\n", numbytes);
         close(accept_fd);
