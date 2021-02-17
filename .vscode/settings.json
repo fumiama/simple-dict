@@ -1,5 +1,6 @@
 {
     "files.associations": {
         "cstdio": "c"
-    }
+    },
+    "cmake.configureOnOpen": false
 }
