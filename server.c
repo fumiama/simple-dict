@@ -2,6 +2,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/signal.h>
+#include <sys/file.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -13,15 +14,17 @@
 #include <pthread.h>
 #include <time.h>
 
+#define PASSWORD "fumiama"
+
 int fd;
 ssize_t numbytes;
 socklen_t struct_len = sizeof(struct sockaddr_in);
 struct sockaddr_in server_addr;
 struct sockaddr_in client_addr;
 char buff[BUFSIZ];
-FILE *fp = NULL;
 char *file_path;
 pthread_t accept_threads[8];
+FILE *fp_cross;
 
 #define MAXWAITSEC 10
 struct THREADTIMER {
@@ -48,12 +51,15 @@ void acceptClient();
 void acceptTimer(void *p);
 int bindServer(uint16_t port, u_int try_times);
 int checkBuffer(int accept_fd);
+int closeDict(FILE *fp);
 off_t fileSize(const char* fname);
 void handleAccept(void *accept_fd_p);
 void handle_quit(int signo);
 int listenSocket(u_int try_times);
+FILE *openDict(int lock_type);
 int sendAll(int accept_fd);
 int sendData(int accept_fd, char *data, size_t length);
+int sm1_pwd(int *s, int accept_fd);
 int s0_init(int *s, int accept_fd);
 int s1_get(int *s, int accept_fd);
 int s2_set(int *s, int accept_fd);
@@ -107,13 +113,20 @@ int sendData(int accept_fd, char *data, size_t length) {
 
 int sendAll(int accept_fd) {
     int re = 1;
-    rewind(fp);
+    FILE *fp = openDict(LOCK_SH);
+    //rewind(fp);
     sprintf(buff, "%zd", fileSize(file_path));
     re = sendData(accept_fd, buff, strlen(buff));
     while((numbytes = fread(buff, 1, BUFSIZ, fp)) > 0) {
         re = sendData(accept_fd, buff, numbytes);
     }
+    closeDict(fp);
     return re;
+}
+
+int sm1_pwd(int *s, int accept_fd) {
+    if(!strcmp(PASSWORD, buff)) *s = 0;
+    return !*s;
 }
 
 int s0_init(int *s, int accept_fd) {
@@ -127,7 +140,8 @@ int s0_init(int *s, int accept_fd) {
 }
 
 int s1_get(int *s, int accept_fd) {
-    rewind(fp);
+    FILE *fp = openDict(LOCK_SH);
+    //rewind(fp);
     while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         u_char ks = dict.keysize;
         dict.key[ks] = 0;
@@ -138,6 +152,7 @@ int s1_get(int *s, int accept_fd) {
         }
     }
     *s = 0;
+    closeDict(fp);
     return sendData(accept_fd, "null", 4);
 }
 
@@ -147,7 +162,8 @@ int s1_get(int *s, int accept_fd) {
 }
 
 int s2_set(int *s, int accept_fd) {
-    rewind(fp);
+    FILE *fp = openDict(LOCK_EX);
+    //rewind(fp);
     *s = 3;
     while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         u_char ks = dict.keysize;
@@ -161,6 +177,7 @@ int s2_set(int *s, int accept_fd) {
     }
     copyKey();
     fseek(fp, 0, SEEK_END);
+    fp_cross = fp;
     return sendData(accept_fd, "data", 4);
 }
 
@@ -168,18 +185,21 @@ int s3_setData(int *s, int accept_fd) {
     dict.datasize = (numbytes >= (DATASIZE-1))?(DATASIZE-1):numbytes;
     memcpy(dict.data, buff, dict.datasize);
     *s = 0;
-    if(fwrite(&dict, DICTBLKSZ, 1, fp) != 1) {
+    if(fwrite(&dict, DICTBLKSZ, 1, fp_cross) != 1) {
         fprintf(stderr, "Error set data: dict[%s]=%s\n", dict.key, buff);
+        closeDict(fp_cross);
         return sendData(accept_fd, "erro", 4);
     } else {
         printf("Set data: dict[%s]=%s\n", dict.key, buff);
-        fflush(fp);
+        //fflush(fp_cross);
+        closeDict(fp_cross);
         return sendData(accept_fd, "succ", 4);
     }
 }
 
 int s4_del(int *s, int accept_fd) {
-    rewind(fp);
+    FILE *fp = openDict(LOCK_EX);
+    //rewind(fp);
     *s = 0;
     while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         dict.key[dict.keysize] = 0;
@@ -189,6 +209,7 @@ int s4_del(int *s, int accept_fd) {
             return sendData(accept_fd, "succ", 4);
         }
     }
+    closeDict(fp);
     return sendData(accept_fd, "null", 4);
 }
 
@@ -203,7 +224,8 @@ int s5_list(int *s, int accept_fd) {
     off_t size = fileSize(file_path) / DICTBLKSZ;
     char *keys = calloc(size, DATASIZE);
     if(keys) {
-        rewind(fp);
+        FILE *fp = openDict(LOCK_SH);
+        //rewind(fp);
         keys[0] = 0;
         while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
             u_char ks = dict.keysize;
@@ -215,15 +237,17 @@ int s5_list(int *s, int accept_fd) {
             }
         }
         int len = strlen(keys);
+        closeDict(fp);
         if(len > 0) return sendData(accept_fd, keys, len);
         else return sendData(accept_fd, "null", 4);
     } else return sendData(accept_fd, "erro", 4);
 }
 
 int checkBuffer(int accept_fd) {
-    static int s = 0;
+    static int s = -1;
     printf("Status: %d\n", s);
     switch(s) {
+        case -1: return sm1_pwd(&s, accept_fd); break;
         case 0: return s0_init(&s, accept_fd); break;
         case 1: return s1_get(&s, accept_fd); break;
         case 2: return s2_set(&s, accept_fd); break;
@@ -294,6 +318,18 @@ void acceptClient() {
     }
 }
 
+FILE *openDict(int lock_type) {
+    FILE *fp = NULL;
+    fp = fopen(file_path, "rb+");
+    if(fp) flock(fileno(fp), lock_type);
+    return fp;
+}
+
+int closeDict(FILE *fp) {
+    if(fp) flock(fileno(fp), LOCK_UN);
+    return fclose(fp);
+}
+
 int main(int argc, char *argv[]) {
     if(argc != 4 && argc != 5) showUsage(argv[0]);
     else {
@@ -305,11 +341,12 @@ int main(int argc, char *argv[]) {
             sscanf(argv[as_daemon?3:2], "%d", &times);
             if(times > 0) {
                 if(!as_daemon || (as_daemon && (daemon(1, 1) >= 0))) {
-                    fp = NULL;
+                    FILE *fp = NULL;
                     fp = fopen(argv[as_daemon?4:3], "rb+");
                     if(!fp) fp = fopen(argv[as_daemon?4:3], "wb+");
                     if(fp) {
                         file_path = argv[as_daemon?4:3];
+                        fclose(fp);
                         if(bindServer(port, times)) if(listenSocket(times)) acceptClient();
                     } else fprintf(stderr, "Error opening dict file: %s\n", argv[as_daemon?4:3]);
                 } else perror("Start daemon error");
