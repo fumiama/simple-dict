@@ -7,7 +7,6 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <stdio.h>
-#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -79,7 +78,7 @@ int bindServer(uint16_t port, u_int try_times) {
     fd = socket(AF_INET, SOCK_STREAM, 0);
     while(!~(result = bind(fd, (struct sockaddr *)&server_addr, struct_len)) && fail_count++ < try_times) sleep(1);
     if(!~result && fail_count >= try_times) {
-        perror("Bind server failure!");
+        puts("Bind server failure!");
         return 0;
     } else{
         puts("Bind server success!");
@@ -92,7 +91,7 @@ int listenSocket(u_int try_times) {
     int result = -1;
     while(!~(result = listen(fd, 10)) && fail_count++ < try_times) sleep(1);
     if(!~result && fail_count >= try_times) {
-        perror("Listen failed!");
+        puts("Listen failed!");
         return 0;
     } else{
         puts("Listening....");
@@ -107,8 +106,8 @@ int freeAfterSend(int accept_fd, char *data, size_t length) {
 }
 
 int sendData(int accept_fd, char *data, size_t length) {
-    if(send(accept_fd, data, length, 0) < 0) {
-        perror("Send data error");
+    if(!~send(accept_fd, data, length, 0)) {
+        puts("Send data error");
         return 0;
     } else {
         printf("Send data: ");
@@ -122,13 +121,13 @@ int sendAll(int accept_fd, char *buff) {
     int re = 1;
     FILE *fp = openDict(LOCK_SH);
     size_t numbytes;
-    //rewind(fp);
-    sprintf(buff, "%zd", fileSize(file_path));
-    re = sendData(accept_fd, buff, strlen(buff));
-    while((numbytes = fread(buff, 1, BUFSIZ, fp)) > 0) {
-        re = sendData(accept_fd, buff, numbytes);
+    if(fp) {
+        sprintf(buff, "%zd", fileSize(file_path));
+        re = sendData(accept_fd, buff, strlen(buff));
+        while(re && (numbytes = fread(buff, 1, BUFSIZ, fp)) > 0)
+            re = sendData(accept_fd, buff, numbytes);
+        closeDict(fp);
     }
-    closeDict(fp);
     return re;
 }
 
@@ -150,7 +149,7 @@ int s0_init(int *s, int accept_fd, char *buff, size_t numbytes) {
 int s1_get(int *s, int accept_fd, char *buff) {
     FILE *fp = openDict(LOCK_SH);
     DICTBLK dict;
-    while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
+    if(fp) while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         u_char ks = dict.keysize;
         dict.key[ks] = 0;
         printf("[%s] Look key: (%d)%s\n", buff, ks, dict.key);
@@ -171,23 +170,27 @@ int s1_get(int *s, int accept_fd, char *buff) {
 
 int s2_set(int *s, int accept_fd, char *buff, size_t numbytes) {
     FILE *fp = openDict(LOCK_EX);
-    //rewind(fp);
-    *s = 3;
-    while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
-        u_char ks = dict.keysize;
-        dict.key[ks] = 0;
-        printf("[%zd] Key size: %d\n", numbytes, ks);
-        if(!dict.keysize || !strcmp(buff, dict.key)) {
-            copyKey();
-            fseek(fp, -DICTBLKSZ, SEEK_CUR);
-            fp_cross = fp;
-            return sendData(accept_fd, "data", 4);
+    if(fp) {
+        *s = 3;
+        while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
+            u_char ks = dict.keysize;
+            dict.key[ks] = 0;
+            printf("[%zd] Key size: %d\n", numbytes, ks);
+            if(!dict.keysize || !strcmp(buff, dict.key)) {
+                copyKey();
+                fseek(fp, -DICTBLKSZ, SEEK_CUR);
+                fp_cross = fp;
+                return sendData(accept_fd, "data", 4);
+            }
         }
+        copyKey();
+        fseek(fp, 0, SEEK_END);
+        fp_cross = fp;
+        return sendData(accept_fd, "data", 4);
+    } else {
+        *s = 0;
+        return sendData(accept_fd, "erro", 4);
     }
-    copyKey();
-    fseek(fp, 0, SEEK_END);
-    fp_cross = fp;
-    return sendData(accept_fd, "data", 4);
 }
 
 int s3_setData(int *s, int accept_fd, char *buff, size_t numbytes) {
@@ -212,7 +215,7 @@ int s4_del(int *s, int accept_fd, char *buff) {
     FILE *fp = openDict(LOCK_EX);
     DICTBLK dict;
     *s = 0;
-    while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
+    if(fp) while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         dict.key[dict.keysize] = 0;
         if(!strcmp(buff, dict.key)) {
             fseek(fp, -DICTBLKSZ+(DATASIZE-1), SEEK_CUR);
@@ -235,9 +238,8 @@ int s5_list(int *s, int accept_fd, char *buff) {
     off_t size = fileSize(file_path) / DICTBLKSZ;
     char *keys = calloc(size, DATASIZE);
     DICTBLK dict;
-    if(keys) {
-        FILE *fp = openDict(LOCK_SH);
-        //rewind(fp);
+    FILE *fp = openDict(LOCK_SH);
+    if(keys && fp) {
         keys[0] = 0;
         while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
             u_char ks = dict.keysize;
@@ -298,7 +300,7 @@ void handleAccept(void *p) {
         puts("Connected to the client.");
         signal(SIGQUIT, handle_quit);
         pthread_t thread;
-        if (pthread_create(&thread, NULL, (void *)&acceptTimer, p)) perror("Error creating timer thread");
+        if (pthread_create(&thread, NULL, (void *)&acceptTimer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
         sendData(accept_fd, "Welcome to simple dict server.", 31);
         int s = -1;
@@ -314,9 +316,9 @@ void handleAccept(void *p) {
                 if(!checkBuffer(accept_fd, &s, buff, numbytes)) break;
             }
             printf("Recv %zd bytes\n", numbytes);
-        } else perror("Error allocating buffer");
+        } else puts("Error allocating buffer");
         close(accept_fd);
-    } else perror("Error accepting client");
+    } else puts("Error accepting client");
 }
 
 void acceptClient() {
@@ -327,13 +329,15 @@ void acceptClient() {
         if(p < 8) {
             printf("Run on thread No.%d\n", p);
             THREADTIMER *timer = malloc(sizeof(THREADTIMER));
-            struct sockaddr_in client_addr;
-            timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
-            timer->thread = &accept_threads[p];
-            timer->touch = time(NULL);
-            timer->data = NULL;
-            if (pthread_create(timer->thread, NULL, (void *)&handleAccept, timer)) perror("Error creating thread");
-            else puts("Creating thread succeeded");
+            if(timer) {
+                struct sockaddr_in client_addr;
+                timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
+                timer->thread = &accept_threads[p];
+                timer->touch = time(NULL);
+                timer->data = NULL;
+                if (pthread_create(timer->thread, NULL, (void *)&handleAccept, timer)) puts("Error creating thread");
+                else puts("Creating thread succeeded");
+            } else puts("Allocate timer error");
         } else {
             puts("Max thread cnt exceeded");
             sleep(1);
@@ -344,8 +348,10 @@ void acceptClient() {
 FILE *openDict(int lock_type) {
     FILE *fp = NULL;
     fp = fopen(file_path, "rb+");
-    if(fp) flock(fileno(fp), lock_type);
-    printf("Open dict in mode %d\n", lock_type);
+    if(fp) {
+        flock(fileno(fp), lock_type);
+        printf("Open dict in mode %d\n", lock_type);
+    } else puts("Open dict error");
     return fp;
 }
 
@@ -374,7 +380,7 @@ int main(int argc, char *argv[]) {
                         fclose(fp);
                         if(bindServer(port, times)) if(listenSocket(times)) acceptClient();
                     } else fprintf(stderr, "Error opening dict file: %s\n", argv[as_daemon?4:3]);
-                } else perror("Start daemon error");
+                } else puts("Start daemon error");
             } else fprintf(stderr, "Error times: %d\n", times);
         } else fprintf(stderr, "Error port: %d\n", port);
     }
