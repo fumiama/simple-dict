@@ -52,6 +52,7 @@ int bindServer(uint16_t port, u_int try_times);
 int checkBuffer(int accept_fd, int *s, char *data, size_t numbytes);
 int freeAfterSend(int accept_fd, char *data, size_t length);
 int closeDict(FILE *fp);
+int closeDictAndSend(FILE *fp, int accept_fd, char *data, size_t numbytes);
 off_t fileSize(const char* fname);
 void handleAccept(void *accept_fd_p);
 void handle_pipe(int signo);
@@ -150,18 +151,15 @@ int s0_init(int *s, int accept_fd, char *buff, size_t numbytes) {
 int s1_get(int *s, int accept_fd, char *buff) {
     FILE *fp = openDict(LOCK_SH);
     DICTBLK dict;
+    *s = 0;
     if(fp) while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         u_char ks = dict.keysize;
         dict.key[ks] = 0;
         printf("[%s] Look key: (%d)%s\n", buff, ks, dict.key);
-        if(!strcmp(buff, dict.key)) {
-            *s = 0;
-            return sendData(accept_fd, dict.data, dict.datasize);
-        }
+        if(!strcmp(buff, dict.key))
+            return closeDictAndSend(fp, accept_fd, dict.data, dict.datasize);
     }
-    *s = 0;
-    closeDict(fp);
-    return sendData(accept_fd, "null", 4);
+    return closeDictAndSend(fp, accept_fd, "null", 4);
 }
 
 #define copyKey() {\
@@ -195,20 +193,17 @@ int s2_set(int *s, int accept_fd, char *buff, size_t numbytes) {
 }
 
 int s3_setData(int *s, int accept_fd, char *buff, size_t numbytes) {
+    *s = 0;
     dict.datasize = (numbytes >= (DATASIZE-1))?(DATASIZE-1):numbytes;
     printf("Set data size: %d\n", dict.datasize);
     memcpy(dict.data, buff, dict.datasize);
     puts("Data copy to dict succ");
-    *s = 0;
     if(fwrite(&dict, DICTBLKSZ, 1, fp_cross) != 1) {
         printf("Error set data: dict[%s]=%s\n", dict.key, buff);
-        closeDict(fp_cross);
-        return sendData(accept_fd, "erro", 4);
+        return closeDictAndSend(fp_cross, accept_fd, "erro", 4);
     } else {
         printf("Set data: dict[%s]=%s\n", dict.key, buff);
-        //fflush(fp_cross);
-        closeDict(fp_cross);
-        return sendData(accept_fd, "succ", 4);
+        return closeDictAndSend(fp_cross, accept_fd, "succ", 4);
     }
 }
 
@@ -221,11 +216,10 @@ int s4_del(int *s, int accept_fd, char *buff) {
         if(!strcmp(buff, dict.key)) {
             fseek(fp, -DICTBLKSZ+(DATASIZE-1), SEEK_CUR);
             fputc(0, fp);
-            return sendData(accept_fd, "succ", 4);
+            return closeDictAndSend(fp, accept_fd, "succ", 4);
         }
     }
-    closeDict(fp);
-    return sendData(accept_fd, "null", 4);
+    return closeDictAndSend(fp, accept_fd, "null", 4);
 }
 
 off_t fileSize(const char* fname) {
@@ -255,7 +249,10 @@ int s5_list(int *s, int accept_fd, char *buff) {
         closeDict(fp);
         if(len > 0) return freeAfterSend(accept_fd, keys, len);
         else return sendData(accept_fd, "null", 4);
-    } else return sendData(accept_fd, "erro", 4);
+    } else {
+        if(fp) closeDict(fp);
+        return sendData(accept_fd, "erro", 4);
+    }
 }
 
 int checkBuffer(int accept_fd, int *s, char *data, size_t numbytes) {
@@ -355,10 +352,18 @@ FILE *openDict(int lock_type) {
     FILE *fp = NULL;
     fp = fopen(file_path, "rb+");
     if(fp) {
-        flock(fileno(fp), lock_type);
+        if(!~flock(fileno(fp), lock_type | LOCK_NB)) {
+            printf("Error: ");
+            fp = NULL;
+        }
         printf("Open dict in mode %d\n", lock_type);
     } else puts("Open dict error");
     return fp;
+}
+
+int closeDictAndSend(FILE *fp, int accept_fd, char *data, size_t numbytes) {
+    closeDict(fp);
+    return sendData(accept_fd, data, numbytes);
 }
 
 int closeDict(FILE *fp) {
