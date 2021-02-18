@@ -200,7 +200,7 @@ int s3_setData(int *s, int accept_fd, char *buff, size_t numbytes) {
     puts("Data copy to dict succ");
     *s = 0;
     if(fwrite(&dict, DICTBLKSZ, 1, fp_cross) != 1) {
-        fprintf(stderr, "Error set data: dict[%s]=%s\n", dict.key, buff);
+        printf("Error set data: dict[%s]=%s\n", dict.key, buff);
         closeDict(fp_cross);
         return sendData(accept_fd, "erro", 4);
     } else {
@@ -294,11 +294,16 @@ void acceptTimer(void *p) {
     free(p);
 }
 
+void handle_pipe(int signo) {
+    puts("Pipe error");
+}
+
 void handleAccept(void *p) {
     int accept_fd = timerPointerOf(p)->accept_fd;
     if(accept_fd > 0) {
         puts("Connected to the client.");
         signal(SIGQUIT, handle_quit);
+        signal(SIGPIPE, handle_pipe);
         pthread_t thread;
         if (pthread_create(&thread, NULL, (void *)&acceptTimer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
@@ -379,10 +384,10 @@ int main(int argc, char *argv[]) {
                         file_path = argv[as_daemon?4:3];
                         fclose(fp);
                         if(bindServer(port, times)) if(listenSocket(times)) acceptClient();
-                    } else fprintf(stderr, "Error opening dict file: %s\n", argv[as_daemon?4:3]);
+                    } else printf("Error opening dict file: %s\n", argv[as_daemon?4:3]);
                 } else puts("Start daemon error");
-            } else fprintf(stderr, "Error times: %d\n", times);
-        } else fprintf(stderr, "Error port: %d\n", port);
+            } else printf("Error times: %d\n", times);
+        } else printf("Error port: %d\n", port);
     }
     close(fd);
     exit(EXIT_FAILURE);
