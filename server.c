@@ -51,7 +51,7 @@ void acceptTimer(void *p);
 int bindServer(uint16_t port, u_int try_times);
 int checkBuffer(int accept_fd, int *s, char *data, size_t numbytes);
 int freeAfterSend(int accept_fd, char *data, size_t length);
-int closeDict(FILE *fp);
+void closeDict(FILE *fp);
 int closeDictAndSend(FILE *fp, int accept_fd, char *data, size_t numbytes);
 off_t fileSize(const char* fname);
 void handleAccept(void *accept_fd_p);
@@ -366,10 +366,12 @@ int closeDictAndSend(FILE *fp, int accept_fd, char *data, size_t numbytes) {
     return sendData(accept_fd, data, numbytes);
 }
 
-int closeDict(FILE *fp) {
+void closeDict(FILE *fp) {
     puts("Close dict");
-    if(fp) flock(fileno(fp), LOCK_UN);
-    return fclose(fp);
+    if(fp) {
+        flock(fileno(fp), LOCK_UN);
+        fclose(fp);
+    }
 }
 
 int main(int argc, char *argv[]) {
