@@ -17,11 +17,10 @@
 #define PASSWORD "fumiama"
 
 int fd;
-ssize_t numbytes;
+//ssize_t numbytes;
 socklen_t struct_len = sizeof(struct sockaddr_in);
 struct sockaddr_in server_addr;
-struct sockaddr_in client_addr;
-char buff[BUFSIZ];
+//char buff[BUFSIZ];
 char *file_path;
 pthread_t accept_threads[8];
 FILE *fp_cross;
@@ -31,6 +30,7 @@ struct THREADTIMER {
     pthread_t *thread;
     time_t touch;
     int accept_fd;
+    char *data;
 };
 typedef struct THREADTIMER THREADTIMER;
 
@@ -50,22 +50,23 @@ DICTBLK dict;
 void acceptClient();
 void acceptTimer(void *p);
 int bindServer(uint16_t port, u_int try_times);
-int checkBuffer(int accept_fd, int *s);
+int checkBuffer(int accept_fd, int *s, char *data, size_t numbytes);
+int freeAfterSend(int accept_fd, char *data, size_t length);
 int closeDict(FILE *fp);
 off_t fileSize(const char* fname);
 void handleAccept(void *accept_fd_p);
 void handle_quit(int signo);
 int listenSocket(u_int try_times);
 FILE *openDict(int lock_type);
-int sendAll(int accept_fd);
+int sendAll(int accept_fd, char *buff);
 int sendData(int accept_fd, char *data, size_t length);
-int sm1_pwd(int *s, int accept_fd);
-int s0_init(int *s, int accept_fd);
-int s1_get(int *s, int accept_fd);
-int s2_set(int *s, int accept_fd);
-int s3_setData(int *s, int accept_fd);
-int s4_del(int *s, int accept_fd);
-int s5_list(int *s, int accept_fd);
+int sm1_pwd(int *s, int accept_fd, char *buff);
+int s0_init(int *s, int accept_fd, char *buff, size_t numbytes);
+int s1_get(int *s, int accept_fd, char *buff);
+int s2_set(int *s, int accept_fd, char *buff, size_t numbytes);
+int s3_setData(int *s, int accept_fd, char *buff, size_t numbytes);
+int s4_del(int *s, int accept_fd, char *buff);
+int s5_list(int *s, int accept_fd, char *buff);
 
 int bindServer(uint16_t port, u_int try_times) {
     int fail_count = 0;
@@ -99,6 +100,12 @@ int listenSocket(u_int try_times) {
     }
 }
 
+int freeAfterSend(int accept_fd, char *data, size_t length) {
+    int re = sendData(accept_fd, data, length);
+    free(data);\
+    return re;
+}
+
 int sendData(int accept_fd, char *data, size_t length) {
     if(send(accept_fd, data, length, 0) < 0) {
         perror("Send data error");
@@ -111,9 +118,10 @@ int sendData(int accept_fd, char *data, size_t length) {
     }
 }
 
-int sendAll(int accept_fd) {
+int sendAll(int accept_fd, char *buff) {
     int re = 1;
     FILE *fp = openDict(LOCK_SH);
+    size_t numbytes;
     //rewind(fp);
     sprintf(buff, "%zd", fileSize(file_path));
     re = sendData(accept_fd, buff, strlen(buff));
@@ -124,24 +132,24 @@ int sendAll(int accept_fd) {
     return re;
 }
 
-int sm1_pwd(int *s, int accept_fd) {
+int sm1_pwd(int *s, int accept_fd, char *buff) {
     if(!strcmp(PASSWORD, buff)) *s = 0;
     return !*s;
 }
 
-int s0_init(int *s, int accept_fd) {
+int s0_init(int *s, int accept_fd, char *buff, size_t numbytes) {
     if(!strcmp("get", buff)) *s = 1;
     else if(!strcmp("set", buff)) *s = 2;
     else if(!strcmp("del", buff)) *s = 4;
     else if(!strcmp("lst", buff)) *s = 5;
-    else if(!strcmp("cat", buff)) return sendAll(accept_fd);
+    else if(!strcmp("cat", buff)) return sendAll(accept_fd, buff);
     else if(!strcmp("quit", buff)) return 0;
     return sendData(accept_fd, buff, numbytes);
 }
 
-int s1_get(int *s, int accept_fd) {
+int s1_get(int *s, int accept_fd, char *buff) {
     FILE *fp = openDict(LOCK_SH);
-    //rewind(fp);
+    DICTBLK dict;
     while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         u_char ks = dict.keysize;
         dict.key[ks] = 0;
@@ -161,7 +169,7 @@ int s1_get(int *s, int accept_fd) {
     strncpy(dict.key, buff, (DATASIZE-1));\
 }
 
-int s2_set(int *s, int accept_fd) {
+int s2_set(int *s, int accept_fd, char *buff, size_t numbytes) {
     FILE *fp = openDict(LOCK_EX);
     //rewind(fp);
     *s = 3;
@@ -172,6 +180,7 @@ int s2_set(int *s, int accept_fd) {
         if(!dict.keysize || !strcmp(buff, dict.key)) {
             copyKey();
             fseek(fp, -DICTBLKSZ, SEEK_CUR);
+            fp_cross = fp;
             return sendData(accept_fd, "data", 4);
         }
     }
@@ -181,9 +190,11 @@ int s2_set(int *s, int accept_fd) {
     return sendData(accept_fd, "data", 4);
 }
 
-int s3_setData(int *s, int accept_fd) {
+int s3_setData(int *s, int accept_fd, char *buff, size_t numbytes) {
     dict.datasize = (numbytes >= (DATASIZE-1))?(DATASIZE-1):numbytes;
+    printf("Set data size: %d\n", dict.datasize);
     memcpy(dict.data, buff, dict.datasize);
+    puts("Data copy to dict succ");
     *s = 0;
     if(fwrite(&dict, DICTBLKSZ, 1, fp_cross) != 1) {
         fprintf(stderr, "Error set data: dict[%s]=%s\n", dict.key, buff);
@@ -197,9 +208,9 @@ int s3_setData(int *s, int accept_fd) {
     }
 }
 
-int s4_del(int *s, int accept_fd) {
+int s4_del(int *s, int accept_fd, char *buff) {
     FILE *fp = openDict(LOCK_EX);
-    //rewind(fp);
+    DICTBLK dict;
     *s = 0;
     while(fread(&dict, DICTBLKSZ, 1, fp) > 0) {
         dict.key[dict.keysize] = 0;
@@ -219,10 +230,11 @@ off_t fileSize(const char* fname) {
     else return -1;
 }
 
-int s5_list(int *s, int accept_fd) {
+int s5_list(int *s, int accept_fd, char *buff) {
     *s = 0;
     off_t size = fileSize(file_path) / DICTBLKSZ;
     char *keys = calloc(size, DATASIZE);
+    DICTBLK dict;
     if(keys) {
         FILE *fp = openDict(LOCK_SH);
         //rewind(fp);
@@ -238,21 +250,21 @@ int s5_list(int *s, int accept_fd) {
         }
         int len = strlen(keys);
         closeDict(fp);
-        if(len > 0) return sendData(accept_fd, keys, len);
+        if(len > 0) return freeAfterSend(accept_fd, keys, len);
         else return sendData(accept_fd, "null", 4);
     } else return sendData(accept_fd, "erro", 4);
 }
 
-int checkBuffer(int accept_fd, int *s) {
+int checkBuffer(int accept_fd, int *s, char *data, size_t numbytes) {
     printf("Status: %d\n", *s);
     switch(*s) {
-        case -1: return sm1_pwd(s, accept_fd); break;
-        case 0: return s0_init(s, accept_fd); break;
-        case 1: return s1_get(s, accept_fd); break;
-        case 2: return s2_set(s, accept_fd); break;
-        case 3: return s3_setData(s, accept_fd); break;
-        case 4: return s4_del(s, accept_fd); break;
-        case 5: return s5_list(s, accept_fd); break;
+        case -1: return sm1_pwd(s, accept_fd, data); break;
+        case 0: return s0_init(s, accept_fd, data, numbytes); break;
+        case 1: return s1_get(s, accept_fd, data); break;
+        case 2: return s2_set(s, accept_fd, data, numbytes); break;
+        case 3: return s3_setData(s, accept_fd, data, numbytes); break;
+        case 4: return s4_del(s, accept_fd, data); break;
+        case 5: return s5_list(s, accept_fd, data); break;
         default: return -1; break;
     }
 }
@@ -262,24 +274,26 @@ void handle_quit(int signo) {
     pthread_exit(NULL);
 }
 
+#define timerPointerOf(x) ((THREADTIMER*)(x))
+#define touchTimer(x) timerPointerOf(x)->touch = time(NULL)
+
 void acceptTimer(void *p) {
-    THREADTIMER *timer = (THREADTIMER*)p;
+    THREADTIMER *timer = timerPointerOf(p);
     while(*timer->thread && !pthread_kill(*timer->thread, 0)) {
         sleep(MAXWAITSEC);
         puts("Check accept status");
         if(time(NULL) - timer->touch > MAXWAITSEC) {
             pthread_kill(*timer->thread, SIGQUIT);
             close(timer->accept_fd);
+            if(timer->data) free(timer->data);
             *timer->thread = 0;
         }
     }
     free(p);
 }
 
-#define touchTimer(x) ((THREADTIMER*)(x))->touch = time(NULL)
-
 void handleAccept(void *p) {
-    int accept_fd = ((THREADTIMER*)p)->accept_fd;
+    int accept_fd = timerPointerOf(p)->accept_fd;
     if(accept_fd > 0) {
         puts("Connected to the client.");
         signal(SIGQUIT, handle_quit);
@@ -288,14 +302,19 @@ void handleAccept(void *p) {
         else puts("Creating timer thread succeeded");
         sendData(accept_fd, "Welcome to simple dict server.", 31);
         int s = -1;
-        while(*((THREADTIMER*)p)->thread && (numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
-            touchTimer(p);
-            buff[numbytes] = 0;
-            printf("Get %zd bytes: %s\n", numbytes, buff);
-            puts("Check buffer");
-            if(!checkBuffer(accept_fd, &s)) break;
-        }
-        printf("Recv %zd bytes\n", numbytes);
+        ssize_t numbytes = 0;
+        char *buff = calloc(BUFSIZ, sizeof(char));
+        if(buff) {
+            timerPointerOf(p)->data = buff;
+            while(*timerPointerOf(p)->thread && (numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
+                touchTimer(p);
+                buff[numbytes] = 0;
+                printf("Get %zd bytes: %s\n", numbytes, buff);
+                puts("Check buffer");
+                if(!checkBuffer(accept_fd, &s, buff, numbytes)) break;
+            }
+            printf("Recv %zd bytes\n", numbytes);
+        } else perror("Error allocating buffer");
         close(accept_fd);
     } else perror("Error accepting client");
 }
@@ -308,9 +327,11 @@ void acceptClient() {
         if(p < 8) {
             printf("Run on thread No.%d\n", p);
             THREADTIMER *timer = malloc(sizeof(THREADTIMER));
+            struct sockaddr_in client_addr;
             timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
             timer->thread = &accept_threads[p];
             timer->touch = time(NULL);
+            timer->data = NULL;
             if (pthread_create(timer->thread, NULL, (void *)&handleAccept, timer)) perror("Error creating thread");
             else puts("Creating thread succeeded");
         } else {
@@ -324,10 +345,12 @@ FILE *openDict(int lock_type) {
     FILE *fp = NULL;
     fp = fopen(file_path, "rb+");
     if(fp) flock(fileno(fp), lock_type);
+    printf("Open dict in mode %d\n", lock_type);
     return fp;
 }
 
 int closeDict(FILE *fp) {
+    puts("Close dict");
     if(fp) flock(fileno(fp), LOCK_UN);
     return fclose(fp);
 }
