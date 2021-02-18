@@ -54,6 +54,7 @@ int freeAfterSend(int accept_fd, char *data, size_t length);
 int closeDict(FILE *fp);
 off_t fileSize(const char* fname);
 void handleAccept(void *accept_fd_p);
+void handle_pipe(int signo);
 void handle_quit(int signo);
 int listenSocket(u_int try_times);
 FILE *openDict(int lock_type);
