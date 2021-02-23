@@ -288,6 +288,7 @@ void handle_quit(int signo) {
 
 void acceptTimer(void *p) {
     THREADTIMER *timer = timerPointerOf(p);
+    signal(SIGPIPE, handle_pipe);
     while(*timer->thread && !pthread_kill(*timer->thread, 0)) {
         sleep(MAXWAITSEC);
         puts("Check accept status");
