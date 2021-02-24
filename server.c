@@ -116,9 +116,7 @@ int sendData(int accept_fd, char *data, size_t length) {
         return 0;
     } else {
         printf("Send data: ");
-        if(length > 64) length = 64;
-        while(length--) putchar(*data++);
-        putchar('\n');
+        puts(data);
         return 1;
     }
 }
