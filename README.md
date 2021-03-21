@@ -3,11 +3,11 @@ database["key"]="value"
 
 # Compile
 You should first clone this project into a system with cmake & libpthread installed.
-If you plan to compile it on Windows, you should edit the source code to transform the socket/thread/file libraries into Windows version.
+If you plan to compile it on Windows, you should edit the source code and transform socket/thread/file libraries into Windows version.
 ```bash
 git clone https://github.com/fumiama/simple-dict-server.git
 ```
-Now we will create a `build` folder.
+Now create a `build` folder.
 ```bash
 cd simple-dict-server
 mkdir build
@@ -17,21 +17,16 @@ Then use `cmake` command to generate files for `make` automatically.
 cd build
 cmake ../
 ```
-Now you can use `make` to generate executable binary files named `simple-dict-server` and `simple-dict-client` in `./build` directory.
+Use `make` to generate executable binary files named `simple-dict-server` and `simple-dict-client` in `./build` directory.
 ```bash
 make
 ```
 
-# Use
+# Execute
 Now we will show you how to start the server on localhost. You can try the command below.
 ```bash
 chmod +x simple-dict-server simple-dict-client
 ./simple-dict-server -d 7777 1 ./dict.bin    # use -d to start as daemon
-Bind server success!
-Listening....
-Ready for accept, waitting...
-Run on thread No.0
-
 ```
 Then you can open another shell to connect to it.
 ```bash
@@ -91,3 +86,10 @@ Enter command:quit
 Enter command:^C
 ```
 The raw data starts with a integer showing the size of data, then send all data in `./dict.bin` to the client.
+
+# Android Client for simple-dict-server
+There is also a [Android Client](https://github.com/fumiama/simple-dict-android) for simple-dict-server. Just install it from release page and click the `config` icon to set your server address using the format like
+```
+127.0.0.1:7777_password
+```
+Note that this APP is designed for a new language called `Tenenja`, so the font of this APP is abnormal. What's more, there is no English translation for this APP because its users are Chinese. If you want to get an APP in your language, just edit the source code for free.
