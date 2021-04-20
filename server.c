@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <sys/signal.h>
 #include <sys/file.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -344,7 +345,14 @@ void handleAccept(void *p) {
 }
 
 void acceptClient() {
-    while(1) {
+    pid_t pid = fork();
+    while (pid > 0) {      //主进程监控子进程状态，如果子进程异常终止则重启之
+        wait(NULL);
+        puts("Server subprocess exited. Restart...");
+        pid = fork();
+    }
+    if(pid < 0) puts("Error when forking a subprocess.");
+    else while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;
         while(p < 8 && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
