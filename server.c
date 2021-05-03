@@ -14,7 +14,12 @@
 #include <pthread.h>
 #include <time.h>
 
+#if !__APPLE__
+    #include <sys/sendfile.h> 
+#endif
+
 #define PASSWORD "fumiama"
+#define SETPASS "minamoto"
 
 int fd;
 //ssize_t numbytes;
@@ -50,21 +55,22 @@ DICTBLK dict;
 
 #define showUsage(program) printf("Usage: %s [-d] listen_port try_times dict_file\n\t-d: As daemon\n", program)
 
-void acceptClient();
-void acceptTimer(void *p);
-int bindServer(uint16_t port, u_int try_times);
-int checkBuffer(THREADTIMER *timer);
-int freeAfterSend(int accept_fd, char *data, size_t length);
-void closeDict(FILE *fp);
-int closeDictAndSend(THREADTIMER *timer, char *data, size_t numbytes);
+void accept_client();
+void accept_timer(void *p);
+int bind_server(uint16_t port, u_int try_times);
+int check_buffer(THREADTIMER *timer);
+void close_dict(FILE *fp);
+int close_and_send(THREADTIMER *timer, char *data, size_t numbytes);
 off_t fileSize(const char* fname);
-void handleAccept(void *accept_fd_p);
+int free_after_send(int accept_fd, char *data, size_t length);
+void handle_accept(void *accept_fd_p);
 void handle_pipe(int signo);
 void handle_quit(int signo);
-int listenSocket(u_int try_times);
-FILE *openDict(int lock_type);
-int sendAll(THREADTIMER *timer);
-int sendData(int accept_fd, char *data, size_t length);
+void kill_thread(THREADTIMER* timer);
+int listen_socket(u_int try_times);
+FILE *open_dict(int lock_type);
+int send_all(THREADTIMER *timer);
+int send_data(int accept_fd, char *data, size_t length);
 int sm1_pwd(THREADTIMER *timer);
 int s0_init(THREADTIMER *timer);
 int s1_get(THREADTIMER *timer);
@@ -73,7 +79,7 @@ int s3_setData(THREADTIMER *timer);
 int s4_del(THREADTIMER *timer);
 int s5_list(THREADTIMER *timer);
 
-int bindServer(uint16_t port, u_int try_times) {
+int bind_server(uint16_t port, u_int try_times) {
     int fail_count = 0;
     int result = -1;
     server_addr.sin_family = AF_INET;
@@ -92,7 +98,7 @@ int bindServer(uint16_t port, u_int try_times) {
     }
 }
 
-int listenSocket(u_int try_times) {
+int listen_socket(u_int try_times) {
     int fail_count = 0;
     int result = -1;
     while(!~(result = listen(fd, 10)) && fail_count++ < try_times) sleep(1);
@@ -105,13 +111,7 @@ int listenSocket(u_int try_times) {
     }
 }
 
-int freeAfterSend(int accept_fd, char *data, size_t length) {
-    int re = sendData(accept_fd, data, length);
-    free(data);\
-    return re;
-}
-
-int sendData(int accept_fd, char *data, size_t length) {
+int send_data(int accept_fd, char *data, size_t length) {
     if(!~send(accept_fd, data, length, 0)) {
         puts("Send data error");
         return 0;
@@ -122,18 +122,37 @@ int sendData(int accept_fd, char *data, size_t length) {
     }
 }
 
-int sendAll(THREADTIMER *timer) {
+int free_after_send(int accept_fd, char *data, size_t length) {
+    int re = send_data(accept_fd, data, length);
+    free(data);\
+    return re;
+}
+
+int send_all(THREADTIMER *timer) {
     int re = 1;
-    FILE *fp = openDict(LOCK_SH);
+    FILE *fp = open_dict(LOCK_SH);
     size_t numbytes;
     if(fp) {
         timer->fp = fp;
         timer->is_open = 1;
+        off_t len = 0;
         sprintf(timer->data, "%zd", fileSize(file_path));
-        re = sendData(timer->accept_fd, timer->data, strlen(timer->data));
-        while(re && (numbytes = fread(timer->data, 1, BUFSIZ, fp)) > 0)
-            re = sendData(timer->accept_fd, timer->data, numbytes);
-        closeDict(fp);
+        printf("Get file size: %s bytes.\n", timer->data);
+        uint32_t head_len = strlen(timer->data);
+        #if __APPLE__
+            struct sf_hdtr hdtr;
+            struct iovec headers;
+            headers.iov_base = timer->data;
+            headers.iov_len = head_len;
+            hdtr.headers = &headers;
+            hdtr.hdr_cnt = 1;
+            sendfile(fileno(fp), timer->accept_fd, 0, &len, &hdtr, 0);
+        #else
+            send_data(timer->accept_fd, timer->data, head_len);
+            sendfile(timer->accept_fd, fileno(fp), &len, file_size);
+        #endif
+        printf("Send %lld bytes.\n", len);
+        close_dict(fp);
         timer->is_open = 0;
     }
     return re;
@@ -146,16 +165,16 @@ int sm1_pwd(THREADTIMER *timer) {
 
 int s0_init(THREADTIMER *timer) {
     if(!strcmp("get", timer->data)) timer->status = 1;
-    else if(!strcmp("set", timer->data)) timer->status = 2;
-    else if(!strcmp("del", timer->data)) timer->status = 4;
+    else if(!strcmp("set" SETPASS, timer->data)) timer->status = 2;
+    else if(!strcmp("del" SETPASS, timer->data)) timer->status = 4;
     else if(!strcmp("lst", timer->data)) timer->status = 5;
-    else if(!strcmp("cat", timer->data)) return sendAll(timer);
+    else if(!strcmp("cat", timer->data)) return send_all(timer);
     else if(!strcmp("quit", timer->data)) return 0;
-    return sendData(timer->accept_fd, timer->data, timer->numbytes);
+    return send_data(timer->accept_fd, timer->data, timer->numbytes);
 }
 
 int s1_get(THREADTIMER *timer) {
-    FILE *fp = openDict(LOCK_SH);
+    FILE *fp = open_dict(LOCK_SH);
     DICTBLK dict;
     timer->status = 0;
     if(fp) {
@@ -166,10 +185,10 @@ int s1_get(THREADTIMER *timer) {
             dict.key[ks] = 0;
             //printf("[%s] Look key: (%d)%s\n", timer->data, ks, dict.key);
             if(!strcmp(timer->data, dict.key))
-                return closeDictAndSend(timer, dict.data, dict.datasize);
+                return close_and_send(timer, dict.data, dict.datasize);
         }
     }
-    return closeDictAndSend(timer, "null", 4);
+    return close_and_send(timer, "null", 4);
 }
 
 #define copyKey() {\
@@ -178,7 +197,7 @@ int s1_get(THREADTIMER *timer) {
 }
 
 int s2_set(THREADTIMER *timer) {
-    FILE *fp = openDict(LOCK_EX);
+    FILE *fp = open_dict(LOCK_EX);
     if(fp) {
         timer->status = 3;
         timer->fp = fp;
@@ -190,15 +209,15 @@ int s2_set(THREADTIMER *timer) {
             if(!dict.keysize || !strcmp(timer->data, dict.key)) {
                 copyKey();
                 fseek(fp, -DICTBLKSZ, SEEK_CUR);
-                return sendData(timer->accept_fd, "data", 4);
+                return send_data(timer->accept_fd, "data", 4);
             }
         }
         copyKey();
         fseek(fp, 0, SEEK_END);
-        return sendData(timer->accept_fd, "data", 4);
+        return send_data(timer->accept_fd, "data", 4);
     } else {
         timer->status = 0;
-        return sendData(timer->accept_fd, "erro", 4);
+        return send_data(timer->accept_fd, "erro", 4);
     }
 }
 
@@ -210,15 +229,15 @@ int s3_setData(THREADTIMER *timer) {
     puts("Data copy to dict succ");
     if(fwrite(&dict, DICTBLKSZ, 1, timer->fp) != 1) {
         printf("Error set data: dict[%s]=%s\n", dict.key, timer->data);
-        return closeDictAndSend(timer, "erro", 4);
+        return close_and_send(timer, "erro", 4);
     } else {
         printf("Set data: dict[%s]=%s\n", dict.key, timer->data);
-        return closeDictAndSend(timer, "succ", 4);
+        return close_and_send(timer, "succ", 4);
     }
 }
 
 int s4_del(THREADTIMER *timer) {
-    FILE *fp = openDict(LOCK_EX);
+    FILE *fp = open_dict(LOCK_EX);
     DICTBLK dict;
     timer->status = 0;
     if(fp) {
@@ -229,11 +248,11 @@ int s4_del(THREADTIMER *timer) {
             if(!strcmp(timer->data, dict.key)) {
                 fseek(fp, -DICTBLKSZ+(DATASIZE-1), SEEK_CUR);
                 fputc(0, fp);
-                return closeDictAndSend(timer, "succ", 4);
+                return close_and_send(timer, "succ", 4);
             }
         }
     }
-    return closeDictAndSend(timer, "null", 4);
+    return close_and_send(timer, "null", 4);
 }
 
 off_t fileSize(const char* fname) {
@@ -247,7 +266,7 @@ int s5_list(THREADTIMER *timer) {
     off_t size = fileSize(file_path) / DICTBLKSZ;
     char *keys = calloc(size, DATASIZE);
     DICTBLK dict;
-    FILE *fp = openDict(LOCK_SH);
+    FILE *fp = open_dict(LOCK_SH);
     if(keys && fp) {
         timer->fp = fp;
         timer->is_open = 1;
@@ -262,18 +281,18 @@ int s5_list(THREADTIMER *timer) {
             }
         }
         int len = strlen(keys);
-        closeDict(fp);
+        close_dict(fp);
         timer->is_open = 0;
-        if(len > 0) return freeAfterSend(timer->accept_fd, keys, len);
-        else return sendData(timer->accept_fd, "null", 4);
+        if(len > 0) return free_after_send(timer->accept_fd, keys, len);
+        else return send_data(timer->accept_fd, "null", 4);
     } else {
-        if(fp) closeDict(fp);
+        if(fp) close_dict(fp);
         timer->is_open = 0;
-        return sendData(timer->accept_fd, "erro", 4);
+        return send_data(timer->accept_fd, "erro", 4);
     }
 }
 
-int checkBuffer(THREADTIMER *timer) {
+int check_buffer(THREADTIMER *timer) {
     printf("Status: %d\n", timer->status);
     switch(timer->status) {
         case -1: return sm1_pwd(timer); break;
@@ -295,38 +314,42 @@ void handle_quit(int signo) {
 #define timerPointerOf(x) ((THREADTIMER*)(x))
 #define touchTimer(x) timerPointerOf(x)->touch = time(NULL)
 
-void acceptTimer(void *p) {
+void accept_timer(void *p) {
     THREADTIMER *timer = timerPointerOf(p);
     signal(SIGQUIT, handle_pipe);
     signal(SIGPIPE, handle_pipe);
     while(*timer->thread && !pthread_kill(*timer->thread, 0)) {
         sleep(MAXWAITSEC);
         puts("Check accept status");
-        if(time(NULL) - timer->touch > MAXWAITSEC) {
-            pthread_kill(*timer->thread, SIGQUIT);
-            close(timer->accept_fd);
-            if(timer->data) free(timer->data);
-            if(timer->is_open) closeDict(timer->fp);
-            *timer->thread = 0;
+        if(*timer->thread && time(NULL) - timer->touch > MAXWAITSEC) {
+            kill_thread(timer);
         }
     }
     free(p);
+}
+
+void kill_thread(THREADTIMER* timer) {
+    pthread_kill(*timer->thread, SIGQUIT);
+    close(timer->accept_fd);
+    if(timer->data) free(timer->data);
+    if(timer->is_open) close_dict(timer->fp);
+    *timer->thread = 0;
 }
 
 void handle_pipe(int signo) {
     puts("Pipe error");
 }
 
-void handleAccept(void *p) {
+void handle_accept(void *p) {
     int accept_fd = timerPointerOf(p)->accept_fd;
     if(accept_fd > 0) {
         puts("Connected to the client.");
         signal(SIGQUIT, handle_quit);
         signal(SIGPIPE, handle_pipe);
         pthread_t thread;
-        if (pthread_create(&thread, NULL, (void *)&acceptTimer, p)) puts("Error creating timer thread");
+        if (pthread_create(&thread, NULL, (void *)&accept_timer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
-        sendData(accept_fd, "Welcome to simple dict server.", 31);
+        send_data(accept_fd, "Welcome to simple dict server.", 31);
         timerPointerOf(p)->status = -1;
         char *buff = calloc(BUFSIZ, sizeof(char));
         if(buff) {
@@ -336,15 +359,16 @@ void handleAccept(void *p) {
                 buff[timerPointerOf(p)->numbytes] = 0;
                 printf("Get %zd bytes: %s\n", timerPointerOf(p)->numbytes, buff);
                 puts("Check buffer");
-                if(!checkBuffer(timerPointerOf(p))) break;
+                if(!check_buffer(timerPointerOf(p))) break;
             }
-            printf("Recv %zd bytes\n", timerPointerOf(p)->numbytes);
+            printf("Break: recv %zd bytes\n", timerPointerOf(p)->numbytes);
+            kill_thread(timerPointerOf(p));
         } else puts("Error allocating buffer");
         close(accept_fd);
     } else puts("Error accepting client");
 }
 
-void acceptClient() {
+void accept_client() {
     pid_t pid = fork();
     while (pid > 0) {      //主进程监控子进程状态，如果子进程异常终止则重启之
         wait(NULL);
@@ -365,7 +389,9 @@ void acceptClient() {
                 timer->thread = &accept_threads[p];
                 timer->touch = time(NULL);
                 timer->data = NULL;
-                if (pthread_create(timer->thread, NULL, (void *)&handleAccept, timer)) puts("Error creating thread");
+                timer->is_open = 0;
+                timer->fp = NULL;
+                if (pthread_create(timer->thread, NULL, (void *)&handle_accept, timer)) puts("Error creating thread");
                 else puts("Creating thread succeeded");
             } else puts("Allocate timer error");
         } else {
@@ -375,7 +401,7 @@ void acceptClient() {
     }
 }
 
-FILE *openDict(int lock_type) {
+FILE *open_dict(int lock_type) {
     FILE *fp = NULL;
     fp = fopen(file_path, (lock_type == LOCK_SH)?"rb":"rb+");
     if(fp) {
@@ -388,13 +414,13 @@ FILE *openDict(int lock_type) {
     return fp;
 }
 
-int closeDictAndSend(THREADTIMER *timer, char *data, size_t numbytes) {
-    closeDict(timer->fp);
+int close_and_send(THREADTIMER *timer, char *data, size_t numbytes) {
+    close_dict(timer->fp);
     timer->is_open = 0;
-    return sendData(timer->accept_fd, data, numbytes);
+    return send_data(timer->accept_fd, data, numbytes);
 }
 
-void closeDict(FILE *fp) {
+void close_dict(FILE *fp) {
     puts("Close dict");
     if(fp) {
         flock(fileno(fp), LOCK_UN);
@@ -421,7 +447,7 @@ int main(int argc, char *argv[]) {
                         fclose(fp);
                         signal(SIGQUIT, handle_pipe);
                         signal(SIGPIPE, handle_pipe);
-                        if(bindServer(port, times)) if(listenSocket(times)) acceptClient();
+                        if(bind_server(port, times)) if(listen_socket(times)) accept_client();
                     } else printf("Error opening dict file: %s\n", argv[as_daemon?4:3]);
                 } else puts("Start daemon error");
             } else printf("Error times: %d\n", times);
