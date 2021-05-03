@@ -135,8 +135,8 @@ int send_all(THREADTIMER *timer) {
     if(fp) {
         timer->fp = fp;
         timer->is_open = 1;
-        off_t len = 0;
-        sprintf(timer->data, "%zd", fileSize(file_path));
+        off_t len = 0, file_size = fileSize(file_path);
+        sprintf(timer->data, "%zd", file_size);
         printf("Get file size: %s bytes.\n", timer->data);
         uint32_t head_len = strlen(timer->data);
         #if __APPLE__
