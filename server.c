@@ -131,7 +131,6 @@ int free_after_send(int accept_fd, char *data, size_t length) {
 int send_all(THREADTIMER *timer) {
     int re = 1;
     FILE *fp = open_dict(LOCK_SH);
-    size_t numbytes;
     if(fp) {
         timer->fp = fp;
         timer->is_open = 1;
