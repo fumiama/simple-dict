@@ -27,7 +27,9 @@ socklen_t struct_len = sizeof(struct sockaddr_in);
 struct sockaddr_in server_addr;
 //char buff[BUFSIZ];
 char *file_path;
-pthread_t accept_threads[8];
+
+#define THREADCNT 16
+pthread_t accept_threads[THREADCNT];
 
 #define MAXWAITSEC 10
 struct THREADTIMER {
@@ -315,25 +317,39 @@ void handle_quit(int signo) {
 #define touchTimer(x) timerPointerOf(x)->touch = time(NULL)
 
 void accept_timer(void *p) {
+    pthread_detach(pthread_self());
     THREADTIMER *timer = timerPointerOf(p);
     signal(SIGQUIT, handle_pipe);
     signal(SIGPIPE, handle_pipe);
-    while(*timer->thread && !pthread_kill(*timer->thread, 0)) {
+    while(!pthread_kill(*timer->thread, 0)) {
         sleep(MAXWAITSEC);
         puts("Check accept status");
-        if(*timer->thread && time(NULL) - timer->touch > MAXWAITSEC) {
+        if(!*timer->thread) {
+            free(timer);
+            break;
+        } else if(time(NULL) - timer->touch > MAXWAITSEC) {
             kill_thread(timer);
+            free(timer);
+            break;
         }
     }
-    free(p);
 }
 
 void kill_thread(THREADTIMER* timer) {
     pthread_kill(*timer->thread, SIGQUIT);
     close(timer->accept_fd);
-    if(timer->data) free(timer->data);
-    if(timer->is_open) close_dict(timer->fp);
+    if(timer->data) {
+        free(timer->data);
+        timer->data = NULL;
+        puts("Free data.");
+    }
+    if(timer->is_open) {
+        close_dict(timer->fp);
+        timer->is_open = 0;
+        puts("Close file.");
+    }
     *timer->thread = 0;
+    puts("Kill thread.");
 }
 
 void handle_pipe(int signo) {
@@ -341,6 +357,7 @@ void handle_pipe(int signo) {
 }
 
 void handle_accept(void *p) {
+    pthread_detach(pthread_self());
     int accept_fd = timerPointerOf(p)->accept_fd;
     if(accept_fd > 0) {
         puts("Connected to the client.");
@@ -379,8 +396,8 @@ void accept_client() {
     else while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;
-        while(p < 8 && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
-        if(p < 8) {
+        while(p < THREADCNT && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
+        if(p < THREADCNT) {
             printf("Run on thread No.%d\n", p);
             THREADTIMER *timer = malloc(sizeof(THREADTIMER));
             if(timer) {
