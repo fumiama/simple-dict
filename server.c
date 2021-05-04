@@ -348,7 +348,7 @@ void kill_thread(THREADTIMER* timer) {
         puts("Free data.");
     }
     if(timer->is_open) {
-        close_file(timer->fp);
+        close_dict(timer->fp);
         timer->is_open = 0;
         puts("Close file.");
     }
