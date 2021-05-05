@@ -147,7 +147,7 @@ int send_all(THREADTIMER *timer) {
             headers.iov_len = head_len;
             hdtr.headers = &headers;
             hdtr.hdr_cnt = 1;
-            re = !sendfile(fileno(fp), timer->accept_fd, 0, &len, &hdtr, 0);
+            re = sendfile(fileno(fp), timer->accept_fd, 0, &len, &hdtr, 0);
         #else
             send_data(timer->accept_fd, timer->data, head_len);
             re = !sendfile(timer->accept_fd, fileno(fp), &len, file_size);
