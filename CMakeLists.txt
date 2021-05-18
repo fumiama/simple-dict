@@ -1,13 +1,19 @@
+cmake_minimum_required(VERSION 3.0.0)
 project(simple-dict-server)
-add_executable(simple-dict-server server.c) # 生成可执行文件
-add_executable(simple-dict-client client.c) # 生成可执行文件
-target_link_libraries(  # 目标库
-                        simple-dict-server
- 
-                        # 目标库需要链接的库
-                        pthread)
-target_link_libraries(  # 目标库
-                        simple-dict-client
- 
-                        # 目标库需要链接的库
-                        pthread)
+
+add_definitions(-DLISTEN_ON_IPV6)
+
+include_directories("/usr/local/include")
+link_directories("/usr/local/lib")
+
+add_library(dict STATIC dict.c)
+
+add_executable(simple-dict-server server.c)
+add_executable(simple-dict-client client.c)
+add_executable(migrate migrate.c)
+add_executable(cfgwriter cfgwriter.c)
+
+target_link_libraries(simple-dict-server dict spb pthread)
+target_link_libraries(simple-dict-client pthread)
+target_link_libraries(migrate spb)
+target_link_libraries(cfgwriter spb)
