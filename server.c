@@ -1,7 +1,5 @@
 #include <sys/types.h>
 #include <sys/socket.h>
-
-#include <sys/signal.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -11,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 #include <time.h>
 #include <simple_protobuf.h>
 #include "dict.h"
@@ -136,7 +135,7 @@ int send_all(THREADTIMER *timer) {
         timer->fp = fp;
         timer->is_open = 1;
         off_t len = 0, file_size = get_dict_size();
-        sprintf(timer->data, "%zd$", file_size);
+        sprintf(timer->data, "%u$", file_size);
         printf("Get file size: %s bytes.\n", timer->data);
         uint32_t head_len = strlen(timer->data);
         #if __APPLE__
@@ -379,7 +378,7 @@ void handle_accept(void *p) {
             while(*(timer_pointer_of(p)->thread) && (timer_pointer_of(p)->numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
                 touch_timer(p);
                 buff[timer_pointer_of(p)->numbytes] = 0;
-                printf("Get %zd bytes: %s\n", timer_pointer_of(p)->numbytes, buff);
+                printf("Get %u bytes: %s\n", timer_pointer_of(p)->numbytes, buff);
                 puts("Check buffer");
                 take_word(p, cfg->pwd);
                 take_word(p, "cat");
@@ -387,7 +386,7 @@ void handle_accept(void *p) {
                 take_word(p, delpass);
                 if(timer_pointer_of(p)->numbytes > 0) chkbuf(p);
             }
-            printf("Break: recv %zd bytes\n", timer_pointer_of(p)->numbytes);
+            printf("Break: recv %u bytes\n", timer_pointer_of(p)->numbytes);
         } else puts("Error allocating buffer");
         *(timer_pointer_of(p)->thread) = 0;
         kill_thread(timer_pointer_of(p));

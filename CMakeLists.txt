@@ -17,3 +17,8 @@ target_link_libraries(simple-dict-server dict spb pthread)
 target_link_libraries(simple-dict-client pthread)
 target_link_libraries(migrate spb)
 target_link_libraries(cfgwriter spb)
+
+INSTALL(TARGETS simple-dict-server RUNTIME DESTINATION bin)
+#INSTALL(TARGETS simple-dict-client RUNTIME DESTINATION bin)
+#INSTALL(TARGETS migrate RUNTIME DESTINATION bin)
+#INSTALL(TARGETS cfgwriter RUNTIME DESTINATION bin)
