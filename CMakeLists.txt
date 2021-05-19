@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 2.6)
 project(simple-dict-server C)
+SET(CMAKE_BUILD_TYPE "Release")
 
 add_definitions(-DLISTEN_ON_IPV6)
 
