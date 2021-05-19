@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.0.0)
-project(simple-dict-server)
+cmake_minimum_required(VERSION 2.6)
+project(simple-dict-server C)
 
 add_definitions(-DLISTEN_ON_IPV6)
 
