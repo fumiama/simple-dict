@@ -152,7 +152,7 @@ int send_all(THREADTIMER *timer) {
             send_data(timer->accept_fd, timer->data, head_len);
             re = sendfile(timer->accept_fd, fileno(fp), &len, file_size) >= 0;
         #endif
-        printf("Send %lld bytes.\n", len);
+        printf("Send %u bytes.\n", len);
         close_dict();
         timer->is_open = 0;
     }

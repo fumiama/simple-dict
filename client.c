@@ -90,7 +90,7 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                         else puts("Send file error.");
                     #endif
                     fclose(fp);
-                    printf("Send count:%lld\n", len);
+                    printf("Send count:%u\n", len);
                 } else puts("Open file error!");
             } else {
                 send(sockfd, buf, strlen(buf), 0);
