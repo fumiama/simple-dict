@@ -72,6 +72,7 @@ int s1_get(THREADTIMER *timer);
 int s2_set(THREADTIMER *timer);
 int s3_set_data(THREADTIMER *timer);
 int s4_del(THREADTIMER *timer);
+int s5_md5(THREADTIMER *timer);
 
 int bind_server(uint16_t port, u_int try_times) {
     int fail_count = 0;
@@ -168,6 +169,7 @@ int s0_init(THREADTIMER *timer) {
     if(!strcmp("get", timer->data)) timer->status = 1;
     else if(!strcmp(setpass, timer->data)) timer->status = 2;
     else if(!strcmp(delpass, timer->data)) timer->status = 4;
+    else if(!strcmp("md5", timer->data)) timer->status = 5;
     else if(!strcmp("cat", timer->data)) return send_all(timer);
     else if(!strcmp("quit", timer->data)) return 0;
     return send_data(timer->accept_fd, timer->data, timer->numbytes);
@@ -280,6 +282,12 @@ int s4_del(THREADTIMER *timer) {
     return close_and_send(timer, "null", 4);
 }
 
+int s5_md5(THREADTIMER *timer) {
+    timer->status = 0;
+    if(is_md5_equal(timer->data)) return send_data(timer->accept_fd, "null", 4);
+    else return send_data(timer->accept_fd, "nequ", 4);
+}
+
 int check_buffer(THREADTIMER *timer) {
     printf("Status: %d\n", timer->status);
     switch(timer->status) {
@@ -289,6 +297,7 @@ int check_buffer(THREADTIMER *timer) {
         case 2: return s2_set(timer); break;
         case 3: return s3_set_data(timer); break;
         case 4: return s4_del(timer); break;
+        case 5: return s5_md5(timer); break;
         default: return -1; break;
     }
 }
@@ -382,6 +391,7 @@ void handle_accept(void *p) {
                 puts("Check buffer");
                 take_word(p, cfg->pwd);
                 take_word(p, "cat");
+                take_word(p, "md5");
                 take_word(p, setpass);
                 take_word(p, delpass);
                 if(timer_pointer_of(p)->numbytes > 0) chkbuf(p);

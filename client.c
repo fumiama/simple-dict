@@ -92,7 +92,16 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                     fclose(fp);
                     printf("Send count:%u\n", len);
                 } else puts("Open file error!");
-            } else {
+            } else if(!strcmp(buf, "2md5")) {
+                uint8_t md5_vals[16];
+                printf("Enter md5 string:");
+                for(int i = 0; i < 16; i++) scanf("%02x", &md5_vals[i]);
+                printf("Read md5:");
+                for(int i = 0; i < 16; i++) printf("%02x", (uint8_t)(md5_vals[i]));
+                putchar('\n');
+                send(sockfd, md5_vals, 16, 0);
+            }
+            else {
                 send(sockfd, buf, strlen(buf), 0);
                 if(!strcmp(buf, "quit")) exit(EXIT_SUCCESS);
             }

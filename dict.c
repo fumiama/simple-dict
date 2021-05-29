@@ -1,10 +1,15 @@
 #include <stdio.h>
 #include <sys/stat.h>
+#include <stdlib.h>
+#include <simplemd5.h>
 #include "dict.h"
 
 static FILE *fp = NULL;
 static int lock = 0;
 static char* filepath;
+static uint8_t* dict_md5;
+#define _dict_md5_4 ((uint32_t*)dict_md5)
+#define _dict_md5_2 ((uint64_t*)dict_md5)
 
 uint32_t last_nonnull(char* p, uint32_t max_size) {
     if(max_size > 1) while(!p[max_size - 1]) max_size--;
@@ -16,7 +21,23 @@ int init_dict(char* file_path) {
     if(fp) {
         lock = LOCK_UN;
         filepath = file_path;
-        return 1;
+        size_t size = get_dict_size();
+        uint8_t* dict_buff = (uint8_t*)malloc(size);
+        if(dict_buff) {
+            if(fread(dict_buff, size, 1, fp) == 1) {
+                if(dict_md5) free(dict_md5);
+                dict_md5 = md5(dict_buff, size);
+                free(dict_buff);
+                return 1;
+            } else {
+                free(dict_buff);
+                puts("Read dict error");
+                return 0;
+            }
+        } else {
+            puts("Allocate memory error");
+            return 0; 
+        }
     } else {
         puts("Open dict error");
         return 0;
@@ -47,4 +68,18 @@ off_t get_dict_size() {
     struct stat statbuf;
     if(stat(filepath, &statbuf)==0) return statbuf.st_size;
     else return -1;
+}
+
+int is_md5_equal(uint8_t* digest) {
+    #ifdef CPUBIT64
+        uint64_t* digest2 = (uint64_t*)digest;
+        return (digest2[0] == _dict_md5_2[0]) &&
+                (digest2[1] == _dict_md5_2[1]);
+    #else
+        uint32_t* digest4 = (uint32_t*)digest;
+        return (digest4[0] == _dict_md5_4[0]) &&
+                (digest4[1] == _dict_md5_4[1]) &&
+                (digest4[2] == _dict_md5_4[2]) &&
+                (digest4[3] == _dict_md5_4[3]);
+    #endif
 }

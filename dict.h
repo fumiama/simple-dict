@@ -20,5 +20,6 @@ int init_dict(char* file_path);
 FILE *open_dict(int lock_type);
 void close_dict();
 off_t get_dict_size();
+int is_md5_equal(uint8_t* digest);
 
 #endif
