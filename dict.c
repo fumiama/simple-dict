@@ -9,8 +9,8 @@ static uint8_t lock = 0;
 static char* filepath;
 static uint8_t* dict_md5;
 
-static FILE *fp = NULL;     //fp for EX
-static FILE *fp5 = NULL;    //fp for md5
+static FILE* fp = NULL;     //fp for EX
+static FILE* fp5 = NULL;    //fp for md5
 static FILE* thread_fp[THREADCNT];
 
 #ifdef CPUBIT64
@@ -88,9 +88,11 @@ FILE* get_dict_fp(uint32_t index) {
     else return NULL;
 }
 
-void close_dict(uint8_t lock_type) {
+void close_dict(uint8_t lock_type, uint32_t index) {
     puts("Close dict");
     lock &= ~lock_type;
+    if(lock_type & LOCK_EX) fflush(fp);
+    else fflush(thread_fp[index]);
 }
 
 off_t get_dict_size() {

@@ -116,7 +116,7 @@ int send_all(THREADTIMER *timer) {
             re = sendfile(timer->accept_fd, fileno(fp), &len, file_size) >= 0;
         #endif
         printf("Send %u bytes.\n", len);
-        close_dict(LOCK_SH);
+        close_dict(LOCK_SH, timer->index);
     }
     return re;
 }
@@ -148,13 +148,13 @@ int s1_get(THREADTIMER *timer) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
             if(!strcmp(timer->data, d->key)) {
-                int r = close_and_send(timer->accept_fd, d->data, last_nonnull(d->data, ITEMSZ), LOCK_SH);
+                int r = close_and_send(timer, d->data, last_nonnull(d->data, ITEMSZ));
                 free(spb);
                 return r;
             } else free(spb);
         }
     }
-    return close_and_send(timer->accept_fd, "null", 4, LOCK_SH);
+    return close_and_send(timer, "null", 4);
 }
 
 int s2_set(THREADTIMER *timer) {
@@ -180,10 +180,10 @@ int s3_set_data(THREADTIMER *timer) {
     puts("Data copy to dict succ");
     if(!set_pb(get_dict_fp(timer->index), items_len, sizeof(DICT), &d)) {
         printf("Error set data: dict[%s]=%s\n", d.key, timer->data);
-        return close_and_send(timer->accept_fd, "erro", 4, LOCK_EX);
+        return close_and_send(timer, "erro", 4);
     } else {
         printf("Set data: dict[%s]=%s\n", d.key, timer->data);
-        return close_and_send(timer->accept_fd, "succ", 4, LOCK_EX);
+        return close_and_send(timer, "succ", 4);
     }
 }
 
@@ -204,10 +204,10 @@ int s4_del(THREADTIMER *timer) {
                 if(next == end) {
                     if(!ftruncate(fileno(fp), end - spb->real_len)) {
                         free(spb);
-                        return close_and_send(timer->accept_fd, "succ", 4, LOCK_EX);
+                        return close_and_send(timer, "succ", 4);
                     } else {
                         free(spb);
-                        return close_and_send(timer->accept_fd, "erro", 4, LOCK_EX);
+                        return close_and_send(timer, "erro", 4);
                     }
                 } else {
                     uint32_t cap = end - next;
@@ -221,19 +221,19 @@ int s4_del(THREADTIMER *timer) {
                                 if(fwrite(data, cap, 1, fp) == 1) {
                                     free(data);
                                     free(spb);
-                                    return close_and_send(timer->accept_fd, "succ", 4, LOCK_EX);
+                                    return close_and_send(timer, "succ", 4);
                                 }
                             }
                         }
                         free(data);
                     }
                     free(spb);
-                    return close_and_send(timer->accept_fd, "erro", 4, LOCK_EX);
+                    return close_and_send(timer, "erro", 4);
                 }
             } else free(spb);
         }
     }
-    return close_and_send(timer->accept_fd, "null", 4, LOCK_EX);
+    return close_and_send(timer, "null", 4);
 }
 
 int s5_md5(THREADTIMER *timer) {
@@ -300,7 +300,7 @@ void kill_thread(THREADTIMER* timer) {
         timer->data = NULL;
         puts("Free data.");
     }
-    if(timer->lock_type) close_dict(timer->lock_type);
+    if(timer->lock_type) close_dict(timer->lock_type, timer->index);
     puts("Finish killing.");
 }
 
@@ -391,9 +391,9 @@ void accept_client() {
     }
 }
 
-int close_and_send(int accept_fd, char *data, size_t numbytes, uint32_t lock_type) {
-    close_dict(lock_type);
-    return send_data(accept_fd, data, numbytes);
+int close_and_send(THREADTIMER* timer, char *data, size_t numbytes) {
+    close_dict(timer->lock_type, timer->index);
+    return send_data(timer->accept_fd, data, numbytes);
 }
 
 #define set_pass(pass, sps, slen, cmd) (pass=malloc(strlen(cmd)+slen+1),((pass)?(strcpy(pass,cmd),strcpy(pass+strlen(cmd),sps),1):0))

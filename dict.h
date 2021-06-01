@@ -19,7 +19,7 @@ int fill_md5();
 uint32_t last_nonnull(char* p, uint32_t max_size);
 int init_dict(char* file_path);
 FILE *open_dict(uint8_t lock_type, uint32_t index);
-void close_dict(uint8_t lock_type);
+void close_dict(uint8_t lock_type, uint32_t index);
 FILE* get_dict_fp(uint32_t index);
 off_t get_dict_size();
 int is_md5_equal(uint8_t* digest);

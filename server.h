@@ -22,7 +22,7 @@ void accept_client();
 void accept_timer(void *p);
 int bind_server(uint16_t port, int try_times);
 int check_buffer(THREADTIMER *timer);
-int close_and_send(int accept_fd, char *data, size_t numbytes, uint32_t lock_type);
+int close_and_send(THREADTIMER* timer, char *data, size_t numbytes);
 int free_after_send(int accept_fd, char *data, size_t length);
 void handle_accept(void *accept_fd_p);
 void handle_pipe(int signo);
