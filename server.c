@@ -12,14 +12,13 @@
 #include <signal.h>
 #include <time.h>
 #include <simple_protobuf.h>
+#include "server.h"
 #include "dict.h"
 #include "config.h"
 
 #if !__APPLE__
     #include <sys/sendfile.h> 
 #endif
-
-static int fd;
 
 #ifdef LISTEN_ON_IPV6
     static socklen_t struct_len = sizeof(struct sockaddr_in6);
@@ -29,52 +28,16 @@ static int fd;
     static struct sockaddr_in server_addr;
 #endif
 
-#define THREADCNT 16
+static int fd;      //server fd
 static pthread_t accept_threads[THREADCNT];
-
-#define MAXWAITSEC 10
-struct THREADTIMER {
-    pthread_t *thread;
-    time_t touch;
-    int accept_fd;
-    ssize_t numbytes;
-    char *data;
-    char status;
-    char is_open;
-    FILE *fp;
-};
-typedef struct THREADTIMER THREADTIMER;
-
 static DICT d;
 static uint32_t* items_len;
-
 static CONFIG* cfg;
 static char *setpass, *delpass;
 
 #define showUsage(program) printf("Usage: %s [-d] listen_port try_times dict_file config_file\n\t-d: As daemon\n", program)
 
-void accept_client();
-void accept_timer(void *p);
-int bind_server(uint16_t port, u_int try_times);
-int check_buffer(THREADTIMER *timer);
-int close_and_send(THREADTIMER *timer, char *data, size_t numbytes);
-int free_after_send(int accept_fd, char *data, size_t length);
-void handle_accept(void *accept_fd_p);
-void handle_pipe(int signo);
-void handle_quit(int signo);
-void kill_thread(THREADTIMER* timer);
-int listen_socket(u_int try_times);
-int send_all(THREADTIMER *timer);
-int send_data(int accept_fd, char *data, size_t length);
-int sm1_pwd(THREADTIMER *timer);
-int s0_init(THREADTIMER *timer);
-int s1_get(THREADTIMER *timer);
-int s2_set(THREADTIMER *timer);
-int s3_set_data(THREADTIMER *timer);
-int s4_del(THREADTIMER *timer);
-int s5_md5(THREADTIMER *timer);
-
-int bind_server(uint16_t port, u_int try_times) {
+int bind_server(uint16_t port, int try_times) {
     int fail_count = 0;
     int result = -1;
     #ifdef LISTEN_ON_IPV6
@@ -99,7 +62,7 @@ int bind_server(uint16_t port, u_int try_times) {
     }
 }
 
-int listen_socket(u_int try_times) {
+int listen_socket(int try_times) {
     int fail_count = 0;
     int result = -1;
     while(!~(result = listen(fd, 10)) && fail_count++ < try_times) sleep(1);
@@ -125,16 +88,15 @@ int send_data(int accept_fd, char *data, size_t length) {
 
 int free_after_send(int accept_fd, char *data, size_t length) {
     int re = send_data(accept_fd, data, length);
-    free(data);\
+    free(data);
     return re;
 }
 
 int send_all(THREADTIMER *timer) {
     int re = 1;
-    FILE *fp = open_dict(LOCK_SH);
+    FILE *fp = open_dict(LOCK_SH, timer->index);
     if(fp) {
-        timer->fp = fp;
-        timer->is_open = 1;
+        timer->lock_type = LOCK_SH;
         off_t len = 0, file_size = get_dict_size();
         sprintf(timer->data, "%u$", file_size);
         printf("Get file size: %s bytes.\n", timer->data);
@@ -154,8 +116,7 @@ int send_all(THREADTIMER *timer) {
             re = sendfile(timer->accept_fd, fileno(fp), &len, file_size) >= 0;
         #endif
         printf("Send %u bytes.\n", len);
-        close_dict();
-        timer->is_open = 0;
+        close_dict(LOCK_SH);
     }
     return re;
 }
@@ -178,37 +139,31 @@ int s0_init(THREADTIMER *timer) {
 #define has_next(fp, ch) ((ch=getc(fp)),(feof(fp)?0:(ungetc(ch,fp),1)))
 
 int s1_get(THREADTIMER *timer) {
-    FILE *fp = open_dict(LOCK_SH);
+    FILE *fp = open_dict(LOCK_SH, timer->index);
     timer->status = 0;
     if(fp) {
-        timer->fp = fp;
-        timer->is_open = 1;
         int ch;
+        timer->lock_type = LOCK_SH;
         while(has_next(fp, ch)) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
             if(!strcmp(timer->data, d->key)) {
-                int r = close_and_send(timer, d->data, last_nonnull(d->data, ITEMSZ));
+                int r = close_and_send(timer->accept_fd, d->data, last_nonnull(d->data, ITEMSZ), LOCK_SH);
                 free(spb);
                 return r;
             } else free(spb);
         }
     }
-    return close_and_send(timer, "null", 4);
-}
-
-#define copy_key() {\
-    strncpy(d.key, timer->data, ITEMSZ-1);\
+    return close_and_send(timer->accept_fd, "null", 4, LOCK_SH);
 }
 
 int s2_set(THREADTIMER *timer) {
-    FILE *fp = open_dict(LOCK_EX);
+    FILE *fp = open_dict(LOCK_EX, timer->index);
     if(fp) {
+        timer->lock_type = LOCK_EX;
         timer->status = 3;
-        timer->fp = fp;
-        timer->is_open = 1;
         memset(&d, 0, sizeof(DICT));
-        copy_key();
+        strncpy(d.key, timer->data, ITEMSZ-1);
         fseek(fp, 0, SEEK_END);
         return send_data(timer->accept_fd, "data", 4);
     } else {
@@ -223,22 +178,21 @@ int s3_set_data(THREADTIMER *timer) {
     printf("Set data size: %u\n", datasize);
     memcpy(d.data, timer->data, datasize);
     puts("Data copy to dict succ");
-    if(!set_pb(timer->fp, items_len, sizeof(DICT), &d)) {
+    if(!set_pb(get_dict_fp(timer->index), items_len, sizeof(DICT), &d)) {
         printf("Error set data: dict[%s]=%s\n", d.key, timer->data);
-        return close_and_send(timer, "erro", 4);
+        return close_and_send(timer->accept_fd, "erro", 4, LOCK_EX);
     } else {
         printf("Set data: dict[%s]=%s\n", d.key, timer->data);
-        return close_and_send(timer, "succ", 4);
+        return close_and_send(timer->accept_fd, "succ", 4, LOCK_EX);
     }
 }
 
 int s4_del(THREADTIMER *timer) {
-    FILE *fp = open_dict(LOCK_EX);
+    FILE *fp = open_dict(LOCK_EX, timer->index);
     timer->status = 0;
     if(fp) {
-        timer->fp = fp;
-        timer->is_open = 1;
         int ch;
+        timer->lock_type = LOCK_EX;
         while(has_next(fp, ch)) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
@@ -250,10 +204,10 @@ int s4_del(THREADTIMER *timer) {
                 if(next == end) {
                     if(!ftruncate(fileno(fp), end - spb->real_len)) {
                         free(spb);
-                        return close_and_send(timer, "succ", 4);
+                        return close_and_send(timer->accept_fd, "succ", 4, LOCK_EX);
                     } else {
                         free(spb);
-                        return close_and_send(timer, "erro", 4);
+                        return close_and_send(timer->accept_fd, "erro", 4, LOCK_EX);
                     }
                 } else {
                     uint32_t cap = end - next;
@@ -267,23 +221,24 @@ int s4_del(THREADTIMER *timer) {
                                 if(fwrite(data, cap, 1, fp) == 1) {
                                     free(data);
                                     free(spb);
-                                    return close_and_send(timer, "succ", 4);
+                                    return close_and_send(timer->accept_fd, "succ", 4, LOCK_EX);
                                 }
                             }
                         }
                         free(data);
                     }
                     free(spb);
-                    return close_and_send(timer, "erro", 4);
+                    return close_and_send(timer->accept_fd, "erro", 4, LOCK_EX);
                 }
             } else free(spb);
         }
     }
-    return close_and_send(timer, "null", 4);
+    return close_and_send(timer->accept_fd, "null", 4, LOCK_EX);
 }
 
 int s5_md5(THREADTIMER *timer) {
     timer->status = 0;
+    fill_md5();
     if(is_md5_equal(timer->data)) return send_data(timer->accept_fd, "null", 4);
     else return send_data(timer->accept_fd, "nequ", 4);
 }
@@ -313,7 +268,8 @@ void handle_quit(int signo) {
 void accept_timer(void *p) {
     pthread_detach(pthread_self());
     THREADTIMER *timer = timer_pointer_of(p);
-    while(*(timer->thread) && !pthread_kill(*(timer->thread), 0)) {
+    uint32_t index = timer->index;
+    while(accept_threads[index] && !pthread_kill(accept_threads[index], 0)) {
         sleep(MAXWAITSEC / 4);
         puts("Check accept status");
         if(time(NULL) - timer->touch > MAXWAITSEC) break;
@@ -327,9 +283,11 @@ void accept_timer(void *p) {
 
 void kill_thread(THREADTIMER* timer) {
     puts("Start killing.");
-    if(*(timer->thread)) {
-        pthread_kill(*(timer->thread), SIGQUIT);
-        *(timer->thread) = 0;
+    uint32_t index = timer->index;
+    pthread_t thread = accept_threads[index];
+    if(thread) {
+        pthread_kill(thread, SIGQUIT);
+        accept_threads[index] = 0;
         puts("Kill thread.");
     }
     if(timer->accept_fd) {
@@ -342,11 +300,7 @@ void kill_thread(THREADTIMER* timer) {
         timer->data = NULL;
         puts("Free data.");
     }
-    if(timer->is_open) {
-        close_dict();
-        timer->is_open = 0;
-        puts("Close file.");
-    }
+    if(timer->lock_type) close_dict(timer->lock_type);
     puts("Finish killing.");
 }
 
@@ -381,10 +335,11 @@ void handle_accept(void *p) {
         else puts("Creating timer thread succeeded");
         send_data(accept_fd, "Welcome to simple dict server.", 31);
         timer_pointer_of(p)->status = -1;
+        uint32_t index = timer_pointer_of(p)->index;
         char *buff = calloc(BUFSIZ, sizeof(char));
         if(buff) {
             timer_pointer_of(p)->data = buff;
-            while(*(timer_pointer_of(p)->thread) && (timer_pointer_of(p)->numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
+            while(accept_threads[index] && (timer_pointer_of(p)->numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
                 touch_timer(p);
                 buff[timer_pointer_of(p)->numbytes] = 0;
                 printf("Get %u bytes: %s\n", timer_pointer_of(p)->numbytes, buff);
@@ -398,7 +353,7 @@ void handle_accept(void *p) {
             }
             printf("Break: recv %u bytes\n", timer_pointer_of(p)->numbytes);
         } else puts("Error allocating buffer");
-        *(timer_pointer_of(p)->thread) = 0;
+        accept_threads[index] = 0;
         kill_thread(timer_pointer_of(p));
     } else puts("Error accepting client");
 }
@@ -421,14 +376,12 @@ void accept_client() {
             if(timer) {
                 struct sockaddr_in client_addr;
                 timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
-                timer->thread = &accept_threads[p];
+                timer->index = p;
                 timer->touch = time(NULL);
                 timer->data = NULL;
-                timer->is_open = 0;
-                timer->fp = NULL;
                 signal(SIGQUIT, handle_quit);
                 signal(SIGPIPE, handle_pipe);
-                if (pthread_create(timer->thread, NULL, (void *)&handle_accept, timer)) puts("Error creating thread");
+                if (pthread_create(accept_threads + p, NULL, (void *)&handle_accept, timer)) puts("Error creating thread");
                 else puts("Creating thread succeeded");
             } else puts("Allocate timer error");
         } else {
@@ -438,10 +391,9 @@ void accept_client() {
     }
 }
 
-int close_and_send(THREADTIMER *timer, char *data, size_t numbytes) {
-    close_dict();
-    timer->is_open = 0;
-    return send_data(timer->accept_fd, data, numbytes);
+int close_and_send(int accept_fd, char *data, size_t numbytes, uint32_t lock_type) {
+    close_dict(lock_type);
+    return send_data(accept_fd, data, numbytes);
 }
 
 #define set_pass(pass, sps, slen, cmd) (pass=malloc(strlen(cmd)+slen+1),((pass)?(strcpy(pass,cmd),strcpy(pass+strlen(cmd),sps),1):0))

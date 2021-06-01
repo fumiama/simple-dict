@@ -3,11 +3,15 @@
 #include <stdlib.h>
 #include <simplemd5.h>
 #include "dict.h"
+#include "server.h"
 
-static FILE *fp = NULL;
-static int lock = 0;
+static uint8_t lock = 0;
 static char* filepath;
 static uint8_t* dict_md5;
+
+static FILE *fp = NULL;     //fp for EX
+static FILE *fp5 = NULL;    //fp for md5
+static FILE* thread_fp[THREADCNT];
 
 #ifdef CPUBIT64
     #define _dict_md5_2 ((uint64_t*)dict_md5)
@@ -15,13 +19,12 @@ static uint8_t* dict_md5;
     #define _dict_md5_4 ((uint32_t*)dict_md5)
 #endif
 
-
-static int fill_md5() {
+int fill_md5() {
     size_t size = get_dict_size();
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
-        rewind(fp);
-        if(fread(dict_buff, size, 1, fp) == 1) {
+        rewind(fp5);
+        if(fread(dict_buff, size, 1, fp5) == 1) {
             if(dict_md5) free(dict_md5);
             dict_md5 = md5(dict_buff, size);
             free(dict_buff);
@@ -44,6 +47,7 @@ uint32_t last_nonnull(char* p, uint32_t max_size) {
 
 int init_dict(char* file_path) {
     fp = fopen(file_path, "rb+");
+    fp5 = fopen(file_path, "rb");
     if(fp) {
         lock = LOCK_UN;
         filepath = file_path;
@@ -54,25 +58,39 @@ int init_dict(char* file_path) {
     }
 }
 
-FILE *open_dict(int lock_type) {
+#define _open_dict(p)\
+    if(p) {\
+        lock |= lock_type;\
+        rewind(p);\
+        return p;\
+    } else {\
+        puts("Open dict error");\
+        return NULL;\
+    }
+
+FILE* open_dict(uint8_t lock_type, uint32_t index) {
     if(lock & LOCK_EX) return NULL;
-    else {
+    else if(lock_type & LOCK_EX) {
         if(!fp) fp = fopen(filepath, "rb+");
-        if(fp) {
-            lock = lock_type;
-            fill_md5();
-            rewind(fp);
-            return fp;
-        } else {
-            puts("Open dict error");
-            return NULL;
-        }
+        _open_dict(fp);
+    } else if(index < THREADCNT) {
+        if(!thread_fp[index]) thread_fp[index] = fopen(filepath, "rb");
+        _open_dict(thread_fp[index]);
+    } else {
+        puts("Index out of bounds");
+        return NULL;
     }
 }
 
-void close_dict() {
+FILE* get_dict_fp(uint32_t index) {
+    if(lock & LOCK_EX) return fp;
+    else if(lock & LOCK_SH && index < THREADCNT) return thread_fp[index];
+    else return NULL;
+}
+
+void close_dict(uint8_t lock_type) {
     puts("Close dict");
-    lock = LOCK_UN;
+    lock &= ~lock_type;
 }
 
 off_t get_dict_size() {
