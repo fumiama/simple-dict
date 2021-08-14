@@ -23,17 +23,20 @@
 #ifdef LISTEN_ON_IPV6
     static socklen_t struct_len = sizeof(struct sockaddr_in6);
     static struct sockaddr_in6 server_addr;
+    static struct sockaddr_in6 client_addr;
 #else
     static socklen_t struct_len = sizeof(struct sockaddr_in);
     static struct sockaddr_in server_addr;
+    static struct sockaddr_in client_addr;
 #endif
 
-static int fd;      //server fd
+static int fd;      // server fd
 static pthread_t accept_threads[THREADCNT];
 static DICT d;
 static uint32_t* items_len;
 static CONFIG* cfg;
 static char *setpass, *delpass;
+static pthread_attr_t attr;
 
 #define showUsage(program) printf("Usage: %s [-d] listen_port try_times dict_file config_file\n\t-d: As daemon\n", program)
 
@@ -266,7 +269,6 @@ void handle_quit(int signo) {
 #define touch_timer(x) timer_pointer_of(x)->touch = time(NULL)
 
 void accept_timer(void *p) {
-    pthread_detach(pthread_self());
     THREADTIMER *timer = timer_pointer_of(p);
     uint32_t index = timer->index;
     while(accept_threads[index] && !pthread_kill(accept_threads[index], 0)) {
@@ -306,6 +308,7 @@ void kill_thread(THREADTIMER* timer) {
 
 void handle_pipe(int signo) {
     printf("Pipe error: %d\n", signo);
+    pthread_exit(NULL);
 }
 
 #define chkbuf(p) if(!check_buffer(timer_pointer_of(p))) break
@@ -324,14 +327,11 @@ void handle_pipe(int signo) {
                     }
 
 void handle_accept(void *p) {
-    pthread_detach(pthread_self());
     int accept_fd = timer_pointer_of(p)->accept_fd;
     if(accept_fd > 0) {
         puts("Connected to the client.");
-        signal(SIGQUIT, handle_quit);
-        signal(SIGPIPE, handle_pipe);
         pthread_t thread;
-        if (pthread_create(&thread, NULL, (void *)&accept_timer, p)) puts("Error creating timer thread");
+        if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
         send_data(accept_fd, "Welcome to simple dict server.", 31);
         timer_pointer_of(p)->status = -1;
@@ -358,13 +358,18 @@ void handle_accept(void *p) {
     } else puts("Error accepting client");
 }
 
+static pid_t pid;
 void accept_client() {
-    pid_t pid = fork();
+    pid = fork();
     while (pid > 0) {      //主进程监控子进程状态，如果子进程异常终止则重启之
         wait(NULL);
         puts("Server subprocess exited. Restart...");
         pid = fork();
     }
+    signal(SIGQUIT, handle_quit);
+    signal(SIGPIPE, handle_pipe);
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, 1);
     if(pid < 0) puts("Error when forking a subprocess.");
     else while(1) {
         puts("Ready for accept, waitting...");
@@ -374,15 +379,29 @@ void accept_client() {
             printf("Run on thread No.%d\n", p);
             THREADTIMER *timer = malloc(sizeof(THREADTIMER));
             if(timer) {
-                struct sockaddr_in client_addr;
                 timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
-                timer->index = p;
-                timer->touch = time(NULL);
-                timer->data = NULL;
-                signal(SIGQUIT, handle_quit);
-                signal(SIGPIPE, handle_pipe);
-                if (pthread_create(accept_threads + p, NULL, (void *)&handle_accept, timer)) puts("Error creating thread");
-                else puts("Creating thread succeeded");
+                if(timer->accept_fd <= 0) {
+                    free(timer);
+                    puts("Accept client error.");
+                } else {
+                    #ifdef LISTEN_ON_IPV6
+                        uint16_t port = ntohs(client_addr.sin6_port);
+                        struct in6_addr in = client_addr.sin6_addr;
+                        char str[INET6_ADDRSTRLEN];	// 46
+                        inet_ntop(AF_INET6, &in, str, sizeof(str));
+                    #else
+                        uint16_t port = ntohs(client_addr.sin_port);
+                        struct in_addr in = client_addr.sin_addr;
+                        char str[INET_ADDRSTRLEN];	// 16
+                        inet_ntop(AF_INET, &in, str, sizeof(str));
+                    #endif
+                    printf("Accept client %s:%u\n", str, port);
+                    timer->index = p;
+                    timer->touch = time(NULL);
+                    timer->data = NULL;
+                    if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) puts("Error creating thread");
+                    else puts("Creating thread succeeded");
+                }
             } else puts("Allocate timer error");
         } else {
             puts("Max thread cnt exceeded");
@@ -397,12 +416,12 @@ int close_and_send(THREADTIMER* timer, char *data, size_t numbytes) {
 }
 
 #define set_pass(pass, sps, slen, cmd) (pass=malloc(strlen(cmd)+slen+1),((pass)?(strcpy(pass,cmd),strcpy(pass+strlen(cmd),sps),1):0))
-
+#define argequ(i, arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
 int main(int argc, char *argv[]) {
     if(argc != 5 && argc != 6) showUsage(argv[0]);
     else {
         int port = 0;
-        int as_daemon = !strcmp("-d", argv[1]);
+        int as_daemon = argequ(1, "-d");
         sscanf(argv[as_daemon?2:1], "%d", &port);
         if(port > 0 && port < 65536) {
             int times = 0;
