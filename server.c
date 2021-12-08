@@ -382,10 +382,7 @@ static void handle_accept(void *p) {
                 printf("Get %u bytes: %s\n", timer_pointer_of(p)->numbytes, buff);
                 puts("Check buffer");
                 take_word(p, cfg->pwd);
-                take_word(p, setpass);
-                take_word(p, delpass);
-                take_word(p, "cat");
-                take_word(p, "md5");
+                take_word(p, setpass) else take_word(p, delpass) else take_word(p, "cat") else take_word(p, "md5");
                 if(timer_pointer_of(p)->numbytes > 0) chkbuf(p);
             }
             printf("Break: recv %u bytes\n", timer_pointer_of(p)->numbytes);
