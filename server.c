@@ -236,7 +236,7 @@ static int s4_del(THREADTIMER *timer) {
         while(has_next(fp, ch)) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
-            if(!memcmp(timer->data, d->key, timer->numbytes)) {
+            if(!memcmp(timer->data, d->key, timer->numbytes+1)) {
                 uint32_t next = ftell(fp);
                 uint32_t this = next - spb->real_len;
                 fseek(fp, 0, SEEK_END);
