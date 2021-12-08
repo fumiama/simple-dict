@@ -40,16 +40,11 @@ int fill_md5() {
     }
 }
 
-uint32_t last_nonnull(char* p, uint32_t max_size) {
-    if(max_size > 1) while(!p[max_size - 1]) max_size--;
-    return max_size;
-}
-
 int init_dict(char* file_path) {
     fp = fopen(file_path, "rb+");
     fp5 = fopen(file_path, "rb");
     if(fp) {
-        lock = LOCK_UN;
+        lock = DICT_LOCK_UN;
         filepath = file_path;
         return fill_md5();
     } else {
@@ -69,8 +64,8 @@ int init_dict(char* file_path) {
     }
 
 FILE* open_dict(uint8_t lock_type, uint32_t index) {
-    if(lock & LOCK_EX) return NULL;
-    else if(lock_type & LOCK_EX) {
+    if(lock & DICT_LOCK_EX) return NULL;
+    else if(lock_type & DICT_LOCK_EX) {
         if(!fp) fp = fopen(filepath, "rb+");
         _open_dict(fp);
     } else if(index < THREADCNT) {
@@ -83,15 +78,15 @@ FILE* open_dict(uint8_t lock_type, uint32_t index) {
 }
 
 FILE* get_dict_fp(uint32_t index) {
-    if(lock & LOCK_EX) return fp;
-    else if(lock & LOCK_SH && index < THREADCNT) return thread_fp[index];
+    if(lock & DICT_LOCK_EX) return fp;
+    else if(lock & DICT_LOCK_SH && index < THREADCNT) return thread_fp[index];
     else return NULL;
 }
 
 void close_dict(uint8_t lock_type, uint32_t index) {
     puts("Close dict");
     lock &= ~lock_type;
-    if(lock_type & LOCK_EX) fflush(fp);
+    if(lock_type & DICT_LOCK_EX) fflush(fp);
     else fflush(thread_fp[index]);
 }
 
