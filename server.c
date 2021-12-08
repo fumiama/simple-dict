@@ -12,7 +12,6 @@
 #include <signal.h>
 #include <time.h>
 #include <simple_protobuf.h>
-#include "server.h"
 #include "dict.h"
 #include "config.h"
 
