@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <simplemd5.h>
 #include "dict.h"
-#include "server.h"
 
 static uint8_t lock = 0;
 static char* filepath;
