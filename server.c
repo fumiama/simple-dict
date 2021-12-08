@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <time.h>
 #include <simple_protobuf.h>
+#include "server.h"
 #include "dict.h"
 #include "config.h"
 
@@ -28,9 +29,6 @@
     static struct sockaddr_in server_addr;
     static struct sockaddr_in client_addr;
 #endif
-
-#define THREADCNT 16
-#define MAXWAITSEC 10
 
 struct THREADTIMER {
     uint32_t index;
