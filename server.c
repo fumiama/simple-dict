@@ -1,23 +1,25 @@
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/wait.h>
-#include <netinet/in.h>
+/* See feature_test_macros(7) */
+#define _GNU_SOURCE 1
 #include <arpa/inet.h>
-#include <netdb.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
+#include <simple_protobuf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <signal.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
-#include <simple_protobuf.h>
+#include <unistd.h>
 #include "server.h"
 #include "dict.h"
+#include "crypto.h"
 #include "config.h"
 
 #if !__APPLE__
-    #include <sys/sendfile.h> 
+    #include <sys/sendfile.h>
 #endif
 
 #ifdef LISTEN_ON_IPV6
@@ -35,8 +37,8 @@ struct THREADTIMER {
     time_t touch;
     int accept_fd;
     ssize_t numbytes;
-    char *data;
-    char status, lock_type;
+    char *dat, *ptr;
+    char lock_type;
 };
 typedef struct THREADTIMER THREADTIMER;
 
@@ -45,7 +47,6 @@ static pthread_t accept_threads[THREADCNT];
 static DICT d;
 static uint32_t* items_len;
 static CONFIG* cfg;
-static char *setpass, *delpass;
 static pthread_attr_t attr;
 
 #define showUsage(program) printf("Usage: %s [-d] listen_port try_times dict_file config_file\n\t-d: As daemon\n", program)
@@ -53,9 +54,7 @@ static pthread_attr_t attr;
 static void accept_client();
 static void accept_timer(void *p);
 static int bind_server(uint16_t port, int try_times);
-static int check_buffer(THREADTIMER *timer);
 static int close_and_send(THREADTIMER* timer, char *data, size_t numbytes);
-static int free_after_send(int accept_fd, char *data, size_t length);
 static void handle_accept(void *accept_fd_p);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
@@ -63,9 +62,7 @@ static void kill_thread(THREADTIMER* timer);
 static uint32_t last_nonnull(char* p, uint32_t max_size);
 static int listen_socket(int try_times);
 static int send_all(THREADTIMER *timer);
-static int send_data(int accept_fd, char *data, size_t length);
-static int sm1_pwd(THREADTIMER *timer);
-static int s0_init(THREADTIMER *timer);
+static int send_data(int accept_fd, int index, char *data, size_t length);
 static int s1_get(THREADTIMER *timer);
 static int s2_set(THREADTIMER *timer);
 static int s3_set_data(THREADTIMER *timer);
@@ -115,8 +112,14 @@ static uint32_t last_nonnull(char* p, uint32_t max_size) {
     return max_size;
 }
 
-static int send_data(int accept_fd, char *data, size_t length) {
-    if(!~send(accept_fd, data, length, 0)) {
+static int send_data(int accept_fd, int index, char *data, size_t length) {
+    char buf[CMDPACKET_LEN_MAX];
+    CMDPACKET* p = (CMDPACKET*)buf;
+    p->cmd = CMDACK;
+    p->datalen = length;
+    memcpy(p->data, data, p->datalen);
+    cmdpacket_encrypt(p, index, cfg->pwd);
+    if(!~send(accept_fd, buf, CMDPACKET_HEAD_LEN+p->datalen, 0)) {
         puts("Send data error");
         return 0;
     } else {
@@ -126,68 +129,43 @@ static int send_data(int accept_fd, char *data, size_t length) {
     }
 }
 
-static int free_after_send(int accept_fd, char *data, size_t length) {
-    int re = send_data(accept_fd, data, length);
-    free(data);
-    return re;
-}
-
 static int send_all(THREADTIMER *timer) {
     int re = 1;
     FILE *fp = open_dict(DICT_LOCK_SH, timer->index);
     if(fp) {
         timer->lock_type = DICT_LOCK_SH;
         off_t len = 0, file_size = get_dict_size();
-        sprintf(timer->data, "%u$", file_size);
-        printf("Get file size: %s bytes.\n", timer->data);
-        uint32_t head_len = strlen(timer->data);
-        #if __APPLE__
-            struct sf_hdtr hdtr;
-            struct iovec headers;
-            headers.iov_base = timer->data;
-            headers.iov_len = head_len;
-            hdtr.headers = &headers;
-            hdtr.hdr_cnt = 1;
-            hdtr.trailers = NULL;
-            hdtr.trl_cnt = 0;
-            re = !sendfile(fileno(fp), timer->accept_fd, 0, &len, &hdtr, 0);
-        #else
-            send_data(timer->accept_fd, timer->data, head_len);
-            re = sendfile(timer->accept_fd, fileno(fp), &len, file_size) >= 0;
-        #endif
-        printf("Send %u bytes.\n", len);
-        close_dict(DICT_LOCK_SH, timer->index);
+        char* buf = (char*)malloc(file_size);
+        if(buf) {
+            if(fread(buf, file_size, 1, fp) == 1) {
+                char* encbuf = raw_encrypt(buf, &file_size, timer->index, cfg->pwd);
+                sprintf(timer->dat, "%zu$", file_size);
+                printf("Get encrypted file size: %s\n", timer->dat);
+                if(send(timer->accept_fd, timer->dat, strlen(timer->dat), 0) > 0) {
+                    re = send(timer->accept_fd, encbuf, file_size, 0) > 0;
+                    printf("Send %u bytes.\n", re);
+                    close_dict(DICT_LOCK_SH, timer->index);
+                } else re = 0;
+                free(encbuf);
+            }
+            free(buf);
+        }
     }
     return re;
-}
-
-static int sm1_pwd(THREADTIMER *timer) {
-    if(!strcmp(cfg->pwd, timer->data)) timer->status = 0;
-    return !timer->status;
-}
-
-static int s0_init(THREADTIMER *timer) {
-    if(!strcmp("get", timer->data)) timer->status = 1;
-    else if(!strcmp(setpass, timer->data)) timer->status = 2;
-    else if(!strcmp(delpass, timer->data)) timer->status = 4;
-    else if(!strcmp("md5", timer->data)) timer->status = 5;
-    else if(!strcmp("cat", timer->data)) return send_all(timer);
-    else if(!strcmp("quit", timer->data)) return 0;
-    return send_data(timer->accept_fd, timer->data, timer->numbytes);
 }
 
 #define has_next(fp, ch) ((ch=getc(fp)),(feof(fp)?0:(ungetc(ch,fp),1)))
 
 static int s1_get(THREADTIMER *timer) {
     FILE *fp = open_dict(DICT_LOCK_SH, timer->index);
-    timer->status = 0;
+    //timer->status = 0;
     if(fp) {
         int ch;
         timer->lock_type = DICT_LOCK_SH;
         while(has_next(fp, ch)) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
-            if(!strcmp(timer->data, d->key)) {
+            if(!strcmp(timer->dat, d->key)) {
                 int r = close_and_send(timer, d->data, last_nonnull(d->data, DICTDATSZ));
                 free(spb);
                 return r;
@@ -201,42 +179,43 @@ static int s2_set(THREADTIMER *timer) {
     FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
     if(fp) {
         timer->lock_type = DICT_LOCK_EX;
-        timer->status = 3;
+        //timer->status = 3;
         memset(&d, 0, sizeof(DICT));
-        strncpy(d.key, timer->data, DICTKEYSZ-1);
+        strncpy(d.key, timer->dat, DICTKEYSZ-1);
         fseek(fp, 0, SEEK_END);
-        return send_data(timer->accept_fd, "data", 4);
+        return send_data(timer->accept_fd, timer->index, "data", 4);
     } else {
-        timer->status = 0;
-        return send_data(timer->accept_fd, "erro", 4);
+        timer->lock_type = DICT_LOCK_UN;
+        //timer->status = 0;
+        return send_data(timer->accept_fd, timer->index, "erro", 4);
     }
 }
 
 static int s3_set_data(THREADTIMER *timer) {
-    timer->status = 0;
+    //timer->status = 0;
     uint32_t datasize = (timer->numbytes > (DICTDATSZ-1))?(DICTDATSZ-1):timer->numbytes;
     printf("Set data size: %u\n", datasize);
-    memcpy(d.data, timer->data, datasize);
+    memcpy(d.data, timer->dat, datasize);
     puts("Data copy to dict succ");
     if(!set_pb(get_dict_fp(timer->index), items_len, sizeof(DICT), &d)) {
-        printf("Error set data: dict[%s]=%s\n", d.key, timer->data);
+        printf("Error set data: dict[%s]=%s\n", d.key, timer->dat);
         return close_and_send(timer, "erro", 4);
     } else {
-        printf("Set data: dict[%s]=%s\n", d.key, timer->data);
+        printf("Set data: dict[%s]=%s\n", d.key, timer->dat);
         return close_and_send(timer, "succ", 4);
     }
 }
 
 static int s4_del(THREADTIMER *timer) {
     FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
-    timer->status = 0;
+    //timer->status = 0;
     if(fp) {
         int ch;
         timer->lock_type = DICT_LOCK_EX;
         while(has_next(fp, ch)) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
-            if(!memcmp(timer->data, d->key, timer->numbytes+1)) {
+            if(!memcmp(timer->dat, d->key, timer->numbytes+1)) {
                 uint32_t next = ftell(fp);
                 uint32_t this = next - spb->real_len;
                 fseek(fp, 0, SEEK_END);
@@ -277,24 +256,10 @@ static int s4_del(THREADTIMER *timer) {
 }
 
 static int s5_md5(THREADTIMER *timer) {
-    timer->status = 0;
+    //timer->status = 0;
     fill_md5();
-    if(is_md5_equal(timer->data)) return send_data(timer->accept_fd, "null", 4);
-    else return send_data(timer->accept_fd, "nequ", 4);
-}
-
-static int check_buffer(THREADTIMER *timer) {
-    printf("Status: %d\n", timer->status);
-    switch(timer->status) {
-        case -1: return sm1_pwd(timer); break;
-        case 0: return s0_init(timer); break;
-        case 1: return s1_get(timer); break;
-        case 2: return s2_set(timer); break;
-        case 3: return s3_set_data(timer); break;
-        case 4: return s4_del(timer); break;
-        case 5: return s5_md5(timer); break;
-        default: return -1; break;
-    }
+    if(is_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, "null", 4);
+    else return send_data(timer->accept_fd, timer->index, "nequ", 4);
 }
 
 static void handle_quit(int signo) {
@@ -334,9 +299,9 @@ static void kill_thread(THREADTIMER* timer) {
         timer->accept_fd = 0;
         puts("Close accept.");
     }
-    if(timer->data) {
-        free(timer->data);
-        timer->data = NULL;
+    if(timer->ptr) {
+        free(timer->ptr);
+        timer->ptr = NULL;
         puts("Free data.");
     }
     if(timer->lock_type) close_dict(timer->lock_type, timer->index);
@@ -348,21 +313,6 @@ static void handle_pipe(int signo) {
     pthread_exit(NULL);
 }
 
-#define chkbuf(p) if(!check_buffer(timer_pointer_of(p))) break
-#define take_word(p, w) if(timer_pointer_of(p)->numbytes > strlen(w) && strstr(buff, w) == buff) {\
-                        int l = strlen(w);\
-                        char store = buff[l];\
-                        buff[l] = 0;\
-                        ssize_t n = timer_pointer_of(p)->numbytes - l;\
-                        timer_pointer_of(p)->numbytes = l;\
-                        chkbuf(p);\
-                        buff[0] = store;\
-                        memmove(buff + 1, buff + l + 1, n - 1);\
-                        buff[n] = 0;\
-                        timer_pointer_of(p)->numbytes = n;\
-                        printf("Split cmd: %s\n", w);\
-                    }
-
 static void handle_accept(void *p) {
     int accept_fd = timer_pointer_of(p)->accept_fd;
     if(accept_fd > 0) {
@@ -370,22 +320,79 @@ static void handle_accept(void *p) {
         pthread_t thread;
         if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
-        send_data(accept_fd, "Welcome to simple dict server.", 31);
-        timer_pointer_of(p)->status = -1;
+        //send_data(accept_fd, "Welcome to simple dict server.", 31);
+        //timer_pointer_of(p)->status = -1;
         uint32_t index = timer_pointer_of(p)->index;
         char *buff = calloc(BUFSIZ, sizeof(char));
         if(buff) {
-            timer_pointer_of(p)->data = buff;
-            while(accept_threads[index] && (timer_pointer_of(p)->numbytes = recv(accept_fd, buff, BUFSIZ, 0)) > 0) {
+            timer_pointer_of(p)->ptr = buff;
+            CMDPACKET* cp = (CMDPACKET*)buff;
+            ssize_t numbytes = 0, offset = 0;
+            while(accept_threads[index] && (numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0) {
                 touch_timer(p);
-                buff[timer_pointer_of(p)->numbytes] = 0;
-                printf("Get %u bytes: %s\n", timer_pointer_of(p)->numbytes, buff);
-                puts("Check buffer");
-                take_word(p, cfg->pwd);
-                take_word(p, setpass) take_word(p, delpass) else take_word(p, "cat") else take_word(p, "md5");
-                if(timer_pointer_of(p)->numbytes > 0) chkbuf(p);
+                offset += numbytes;
+                printf("[normal] Get %zd bytes head.\n", numbytes);
+                if(offset < CMDPACKET_HEAD_LEN) break;
+                if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
+                    numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
+                    printf("[normal] Get %zd bytes body.\n", numbytes);
+                }
+                if(numbytes <= 0) break;
+                else offset += numbytes;
+                if(offset < CMDPACKET_HEAD_LEN+cp->datalen) break;
+                printf("[normal] Decrypt %zd bytes data...\n", cp->datalen);
+                if(cmdpacket_decrypt(cp, index, cfg->pwd)) {
+                    cp->data[cp->datalen] = 0;
+                    timer_pointer_of(p)->dat = (char*)cp->data;
+                    timer_pointer_of(p)->numbytes = cp->datalen;
+                    printf("[normal] Get %zd bytes data: %s\n", offset, cp->data);
+                    switch(cp->cmd) {
+                        case CMDGET:
+                            //timer_pointer_of(p)->status = 1;
+                            if(!s1_get(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDCAT:
+                            if(!send_all(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDMD5:
+                            //timer_pointer_of(p)->status = 5;
+                            if(!s5_md5(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDACK: break;
+                        case CMDEND:
+                        default: goto CONV_END; break;
+                    }
+                } else if(cmdpacket_decrypt(cp, index, cfg->sps)) {
+                    cp->data[cp->datalen] = 0;
+                    timer_pointer_of(p)->dat = (char*)cp->data;
+                    timer_pointer_of(p)->numbytes = cp->datalen;
+                    printf("[super] Get %zd bytes data: %s\n", offset, cp->data);
+                    switch(cp->cmd) {
+                        case CMDSET:
+                            //timer_pointer_of(p)->status = 2;
+                            if(!s2_set(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDDEL:
+                            //timer_pointer_of(p)->status = 4;
+                            if(!s4_del(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDDAT:
+                            if(timer_pointer_of(p)->lock_type == DICT_LOCK_EX) {
+                                if(!s3_set_data(timer_pointer_of(p))) goto CONV_END;
+                            }
+                        break;
+                        default: goto CONV_END; break;
+                    }
+                } else {
+                    puts("decrypt data failed.");
+                    break;
+                }
+                if(offset > CMDPACKET_HEAD_LEN+cp->datalen) {
+                    offset -= CMDPACKET_HEAD_LEN+cp->datalen;
+                    memmove(buff, buff+CMDPACKET_HEAD_LEN+cp->datalen, offset);
+                } else offset = 0;
             }
-            printf("Break: recv %u bytes\n", timer_pointer_of(p)->numbytes);
+            CONV_END: puts("Conversation end\n");
         } else puts("Error allocating buffer");
         accept_threads[index] = 0;
         kill_thread(timer_pointer_of(p));
@@ -404,6 +411,7 @@ static void accept_client() {
     signal(SIGPIPE, handle_pipe);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, 1);
+    init_crypto();
     if(pid < 0) puts("Error when forking a subprocess.");
     else while(1) {
         puts("Ready for accept, waitting...");
@@ -432,7 +440,10 @@ static void accept_client() {
                     printf("Accept client %s:%u\n", str, port);
                     timer->index = p;
                     timer->touch = time(NULL);
-                    timer->data = NULL;
+                    timer->ptr = NULL;
+                    puts("reset seq...");
+                    reset_seq(p);
+                    puts("reset seq succeed");
                     if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) puts("Error creating thread");
                     else puts("Creating thread succeeded");
                 }
@@ -446,10 +457,9 @@ static void accept_client() {
 
 static int close_and_send(THREADTIMER* timer, char *data, size_t numbytes) {
     close_dict(timer->lock_type, timer->index);
-    return send_data(timer->accept_fd, data, numbytes);
+    return send_data(timer->accept_fd, timer->index, data, numbytes);
 }
 
-#define set_pass(pass, sps, slen, cmd) (pass=malloc(strlen(cmd)+slen+1),((pass)?(strcpy(pass,cmd),strcpy(pass+strlen(cmd),sps),1):0))
 #define argequ(i, arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
 int main(int argc, char *argv[]) {
     if(argc != 5 && argc != 6) showUsage(argv[0]);
@@ -474,13 +484,10 @@ int main(int argc, char *argv[]) {
                             SIMPLE_PB* spb = get_pb(fp);
                             cfg = (CONFIG*)spb->target;
                             fclose(fp);
-                            int slen = strlen(cfg->sps);
-                            if(set_pass(setpass, cfg->sps, slen, "set") && set_pass(delpass, cfg->sps, slen, "del")) {
-                                items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
-                                if(items_len) {
-                                    if(bind_server(port, times)) if(listen_socket(times)) accept_client();
-                                } else puts("Align struct error.");
-                            } else puts("Allocate memory error.");
+                            items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
+                            if(items_len) {
+                                if(bind_server(port, times)) if(listen_socket(times)) accept_client();
+                            } else puts("Align struct error.");
                         } else printf("Error opening config file: %s\n", argv[as_daemon?5:4]);
                     } else printf("Error opening dict file: %s\n", argv[as_daemon?4:3]);
                 } else puts("Start daemon error");
