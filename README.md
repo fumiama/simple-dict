@@ -21,6 +21,7 @@ Use `make` to generate executable binary files named `simple-dict-server` and `s
 ```bash
 make
 ```
+Then you should install [simple-crypto](https://github.com/fumiama/simple-crypto) and [simple-protobuf](https://github.com/fumiama/simple-protobuf) by the same way.
 
 # Execute
 Start server on localhost using the commands below.
@@ -36,17 +37,18 @@ Open another shell to connect to it.
 ```
 Now you have connected to the server. The default access passwords is in `client.c` and you can modify the password in source code as you like. Please note that the server will only wait `10` seconds for a response after the last communication. The box below shows how to control the server to accompilsh basic add/del/find/edit operations.
 
-|  cmd  |  data  |  description  |
-|  ----  | ----  | ----  |
-| get:  | key | get key value |
-| cat:  | filename | save raw dict.sp into filename |
-| md5:  | md5 str | compare whether md5 of dict.sp is what given in data |
-| end   | no data  | end conversation |
-| set:  | key | set key |
-| dat:  | value to set | give value to the key |
-| del:  | key | del key |
+|  cmd  |  data  |  description  |  reply  |
+|  ----  | ----  | ----  | ----- |
+| get:  | key | get key value | the value or "null" |
+| cat:  | filename | save raw dict.sp into filename | the raw data |
+| md5:  | md5 str | compare whether md5 of dict.sp is what given in data | "nequ" or "null" |
+| end   | no data  | end conversation | no reply |
+| set:  | key | set key | "data" |
+| dat:  | value to set | give value to the key | "succ" |
+| del:  | key | del key | "succ" or "null |
 
-The raw data starts with an integer showing its size, then a char `$` follows, finally following all binary data in `./dict.sp` encoded by `TEA`.
+- The raw data starts with an integer showing its size, then a char `$` follows, finally following all binary data in `./dict.sp` encoded by `TEA`.
+- Whenever the reply is "erro", it indicates that the server has some troubles, which means that you shuold end the conversation and retry later.
 
 A cmd sequence example is as below
 ```bash
