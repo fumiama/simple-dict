@@ -138,11 +138,15 @@ static int send_all(THREADTIMER *timer) {
         char* buf = (char*)malloc(file_size);
         if(buf) {
             if(fread(buf, file_size, 1, fp) == 1) {
+                printf("Get dict file size: %zu\n", file_size);
                 char* encbuf = raw_encrypt(buf, &file_size, timer->index, cfg->pwd);
                 sprintf(timer->dat, "%zu$", file_size);
                 printf("Get encrypted file size: %s\n", timer->dat);
+                //FILE* fp = fopen("raw_after_enc", "wb+");
+                //fwrite(encbuf, file_size, 1, fp);
+                //fclose(fp);
                 if(send(timer->accept_fd, timer->dat, strlen(timer->dat), 0) > 0) {
-                    re = send(timer->accept_fd, encbuf, file_size, 0) > 0;
+                    re = send(timer->accept_fd, encbuf, file_size, 0);
                     printf("Send %u bytes.\n", re);
                     close_dict(DICT_LOCK_SH, timer->index);
                 } else re = 0;
@@ -275,14 +279,15 @@ static void accept_timer(void *p) {
     uint32_t index = timer->index;
     while(accept_threads[index] && !pthread_kill(accept_threads[index], 0)) {
         sleep(MAXWAITSEC / 4);
-        puts("Check accept status");
-        if(time(NULL) - timer->touch > MAXWAITSEC) break;
+        time_t waitsec = time(NULL) - timer->touch;
+        printf("Wait sec: %u, max: %u\n", waitsec, MAXWAITSEC);
+        if(waitsec > MAXWAITSEC) break;
     }
     puts("Call kill thread");
     kill_thread(timer);
     puts("Free timer");
     free(timer);
-    puts("Finish calling kill thread");
+    puts("Finish calling kill thread\n");
 }
 
 static void kill_thread(THREADTIMER* timer) {
@@ -316,7 +321,7 @@ static void handle_pipe(int signo) {
 static void handle_accept(void *p) {
     int accept_fd = timer_pointer_of(p)->accept_fd;
     if(accept_fd > 0) {
-        puts("Connected to the client.");
+        puts("\nConnected to the client.");
         pthread_t thread;
         if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
@@ -328,24 +333,33 @@ static void handle_accept(void *p) {
             timer_pointer_of(p)->ptr = buff;
             CMDPACKET* cp = (CMDPACKET*)buff;
             ssize_t numbytes = 0, offset = 0;
-            while(accept_threads[index] && (numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0) {
+            while(
+                    accept_threads[index]
+                    && (
+                        offset >= CMDPACKET_HEAD_LEN
+                        || (numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0
+                    )
+                ) {
                 touch_timer(p);
                 offset += numbytes;
-                printf("[normal] Get %zd bytes head.\n", numbytes);
+                printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
                 if(offset < CMDPACKET_HEAD_LEN) break;
                 if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
                     numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
-                    printf("[normal] Get %zd bytes body.\n", numbytes);
+                    if(numbytes <= 0) break;
+                    else {
+                        offset += numbytes;
+                        printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+                    }
                 }
-                if(numbytes <= 0) break;
-                else offset += numbytes;
-                if(offset < CMDPACKET_HEAD_LEN+cp->datalen) break;
-                printf("[normal] Decrypt %zd bytes data...\n", cp->datalen);
-                if(cmdpacket_decrypt(cp, index, cfg->pwd)) {
+                numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
+                if(offset < numbytes) break;
+                printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
+                if(cp->cmd < 5 && cmdpacket_decrypt(cp, index, cfg->pwd)) {
                     cp->data[cp->datalen] = 0;
                     timer_pointer_of(p)->dat = (char*)cp->data;
                     timer_pointer_of(p)->numbytes = cp->datalen;
-                    printf("[normal] Get %zd bytes data: %s\n", offset, cp->data);
+                    printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
                     switch(cp->cmd) {
                         case CMDGET:
                             //timer_pointer_of(p)->status = 1;
@@ -366,7 +380,7 @@ static void handle_accept(void *p) {
                     cp->data[cp->datalen] = 0;
                     timer_pointer_of(p)->dat = (char*)cp->data;
                     timer_pointer_of(p)->numbytes = cp->datalen;
-                    printf("[super] Get %zd bytes data: %s\n", offset, cp->data);
+                    printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
                     switch(cp->cmd) {
                         case CMDSET:
                             //timer_pointer_of(p)->status = 2;
@@ -384,13 +398,15 @@ static void handle_accept(void *p) {
                         default: goto CONV_END; break;
                     }
                 } else {
-                    puts("decrypt data failed.");
+                    puts("Decrypt data failed.");
                     break;
                 }
-                if(offset > CMDPACKET_HEAD_LEN+cp->datalen) {
-                    offset -= CMDPACKET_HEAD_LEN+cp->datalen;
-                    memmove(buff, buff+CMDPACKET_HEAD_LEN+cp->datalen, offset);
+                if(offset > numbytes) {
+                    offset -= numbytes;
+                    memmove(buff, buff+numbytes, offset);
+                    numbytes = 0;
                 } else offset = 0;
+                printf("Offset after analyzing packet: %zd\n", offset);
             }
             CONV_END: puts("Conversation end\n");
         } else puts("Error allocating buffer");
@@ -418,7 +434,7 @@ static void accept_client() {
         int p = 0;
         while(p < THREADCNT && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
         if(p < THREADCNT) {
-            printf("Run on thread No.%d\n", p);
+            printf("Next thread is No.%d\n", p);
             THREADTIMER *timer = malloc(sizeof(THREADTIMER));
             if(timer) {
                 timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
@@ -441,9 +457,8 @@ static void accept_client() {
                     timer->index = p;
                     timer->touch = time(NULL);
                     timer->ptr = NULL;
-                    puts("reset seq...");
                     reset_seq(p);
-                    puts("reset seq succeed");
+                    puts("Reset seq succeed");
                     if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) puts("Error creating thread");
                     else puts("Creating thread succeeded");
                 }

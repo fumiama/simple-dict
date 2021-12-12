@@ -19,68 +19,91 @@
     struct sf_hdtr hdtr; 
 #endif
 
-int sockfd;
-char buf[BUFSIZ];
-char bufr[BUFSIZ];
-struct sockaddr_in their_addr;
-pthread_t thread;
-uint32_t file_size;
-int recv_bin = 0;
+static int sockfd;
+static char buf[BUFSIZ];
+static char bufr[BUFSIZ];
+static struct sockaddr_in their_addr;
+static pthread_t thread;
+static uint32_t file_size;
+static int recv_bin = 0;
+static char pwd[64] = "testpwd";
+static char sps[64] = "testsps";
 
 void getMessage(void *p) {
     int c = 0, offset = 0;
-    CMDPACKET* cp = bufr;
-    while((c = recv(sockfd, bufr+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0) {
-        printf("Recv %d bytes: ", c);
+    CMDPACKET* cp = (CMDPACKET*)bufr;
+    while(offset >= CMDPACKET_HEAD_LEN || (c = recv(sockfd, bufr+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0) {
+        printf("Recv %d bytes.\n", c);
         if(recv_bin) {
-            recv_bin = 0;
-            int i = 0;
-            bufr[0] = 0;
-            while(bufr[i] != '$') recv(sockfd, bufr+i, 1, MSG_WAITALL);
-            bufr[i] = 0;
-            off_t datalen;
-            sscanf(bufr, "%d", &datalen);
-            printf("raw data len: %d\n", datalen);
-            char* data = malloc(datalen);
-            if(datalen == recv(sockfd, data, datalen, MSG_WAITALL)) {
-                raw_decrypt(data, &datalen, 0, "testpwd");
-                printf("raw data len after decode: %d\n", datalen);
-                FILE* fp = fopen("rawdata.bin", "w+");
-                fwrite(data, datalen, 1, fp);
-                fclose(fp);
+            if(~recv_bin) {
+                recv_bin = -1;
+                int l = strlen(buf+4);
+                char savepath[l+1];
+                memcpy(savepath, buf+4, l+1);
+                printf("Save path: ");
+                puts(savepath);
+                int i = 0;
+                while(bufr[i] != '$') i++;
+                while(bufr[i] != '$') recv(sockfd, bufr+i++, 1, MSG_WAITALL);
+                bufr[i] = 0;
+                off_t datalen;
+                sscanf(bufr, "%d", &datalen);
+                printf("raw data len: %d\n", datalen);
+                char* data = malloc(datalen);
+                offset = c - ++i;
+                if(offset > 0) {
+                    memcpy(data, bufr+i, offset);
+                    printf("copy %d bytes data that had been received.\n", offset);
+                }
+                else offset = 0;
+                if(datalen-offset == recv(sockfd, data+offset, datalen-offset, MSG_WAITALL)) {
+                    //FILE* fp = fopen("raw_before_dec", "wb+");
+                    //fwrite(data, datalen, 1, fp);
+                    //fclose(fp);
+                    char* newdata = raw_decrypt(data, &datalen, 0, pwd);
+                    if(newdata) {
+                        printf("raw data len after decode: %d\n", datalen);
+                        FILE* fp = fopen(savepath, "wb+");
+                        fwrite(newdata, datalen, 1, fp);
+                        fclose(fp);
+                        free(newdata);
+                        puts("recv raw data succeed.");
+                    } else puts("decode raw data error.");
+                } else puts("recv raw data error.");
                 free(data);
-                puts("recv raw data succeed.");
-            } else {
-                puts("recv raw data error.");
-                free(data);
-                break;
+                recv_bin = offset =  0;
             }
         } else {
             offset += c;
-            if(offset < CMDPACKET_HEAD_LEN) {
-                puts("recv head error.");
-                break;
-            }
-            c = recv(sockfd, bufr+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
-            if(c <= 0) {
-                puts("on recv body error.");
-                break;
-            } else offset += c;
+            printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+            if(offset < CMDPACKET_HEAD_LEN) break;
             if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
-                puts("after recv body error.");
-                break;
+                c = recv(sockfd, bufr+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
+                if(c <= 0) break;
+                else {
+                    offset += c;
+                    printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+                }
             }
-            if(cmdpacket_decrypt(cp, index, "testpwd")) {
+            c = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
+            if(offset < c) break;
+            printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
+            if(cmdpacket_decrypt(cp, 0, pwd)) {
                 cp->data[cp->datalen] = 0;
-                printf("[normal] Get %u bytes data: %s\n", offset, cp->data);
+                printf("[normal] Get %u bytes packet with data: %s\n", offset, cp->data);
                 switch(cp->cmd) {
                     case CMDACK:
                         printf("recv ack: %s\n", cp->data);
                     break;
-                    case CMDEND:
-                    default: return; break;
+                    default: break;
                 }
             }
+            if(offset > c) {
+                offset -= c;
+                memmove(bufr, bufr+c, offset);
+                c = 0;
+            } else offset = 0;
+            printf("offset after analyzing packet: %zd\n", offset);
         }
     }
 }
@@ -93,6 +116,9 @@ off_t file_size_of(const char* fname) {
 
 void send_cmd(int accept_fd, CMDPACKET* p) {
     printf("send %d bytes encrypted data with %d bytes head.\n", p->datalen, CMDPACKET_HEAD_LEN);
+    printf("raw packet: ");
+    for(int i = 0; i < CMDPACKET_HEAD_LEN+p->datalen; i++) printf("%02x", ((uint8_t*)p)[i]);
+    putchar('\n');
     if(!~send(accept_fd, (void*)p, CMDPACKET_HEAD_LEN+p->datalen, 0)) puts("Send data error");
     else puts("Send data succeed.");
 }
@@ -106,7 +132,6 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
     their_addr.sin_port = htons(atoi(argv[2]));
     their_addr.sin_addr.s_addr=inet_addr(argv[1]);
     bzero(&(their_addr.sin_zero), 8);
-    
     while(connect(sockfd,(struct sockaddr*)&their_addr,sizeof(struct sockaddr)) == -1);
     puts("Connected to server");
     if(!pthread_create(&thread, NULL, (void*)&getMessage, NULL)) {
@@ -143,57 +168,66 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                         else puts("Send file error.");
                     #endif
                     fclose(fp);
-                    printf("Send count:%u\n", len);
+                    printf("Send count: %u\n", len);
                 } else puts("Open file error!");
-            } else if(!strcmp(buf, "2md5")) {
-                uint8_t md5_vals[16];
-                printf("Enter md5 string:");
-                for(int i = 0; i < 16; i++) scanf("%02x", &md5_vals[i]);
-                printf("Read md5:");
-                for(int i = 0; i < 16; i++) printf("%02x", (uint8_t)(md5_vals[i]));
-                putchar('\n');
-                send(sockfd, md5_vals, 16, 0);
             }
             else {
                 buf[3] = 0;
+                CMDPACKET* p = malloc(CMDPACKET_LEN_MAX);
                 if(!strcmp(buf, "set")) {
-                    CMDPACKET* p = malloc(CMDPACKET_HEAD_LEN+strlen(buf+4));
                     p->cmd = CMDSET;
                     p->datalen = strlen(buf+4);
                     memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, "testsps");
+                    cmdpacket_encrypt(p, 0, sps);
+                    send_cmd(sockfd, p);
+                    free(p);
+                } else if(!strcmp(buf, "dat")) {
+                    p->cmd = CMDDAT;
+                    p->datalen = strlen(buf+4);
+                    memcpy(p->data, buf+4, p->datalen);
+                    cmdpacket_encrypt(p, 0, sps);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "get")) {
-                    CMDPACKET* p = malloc(CMDPACKET_HEAD_LEN+strlen(buf+4));
                     p->cmd = CMDGET;
                     p->datalen = strlen(buf+4);
                     memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, "testpwd");
+                    cmdpacket_encrypt(p, 0, pwd);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "cat")) {
-                    CMDPACKET* p = malloc(CMDPACKET_HEAD_LEN+strlen(buf+4));
                     p->cmd = CMDCAT;
                     p->datalen = 4;
                     memcpy(p->data, "fill", p->datalen);
-                    cmdpacket_encrypt(p, 0, "testpwd");
+                    recv_bin = 1;
+                    cmdpacket_encrypt(p, 0, pwd);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "del")) {
-                    CMDPACKET* p = malloc(CMDPACKET_HEAD_LEN+strlen(buf+4));
                     p->cmd = CMDDEL;
                     p->datalen = strlen(buf+4);
                     memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, "testsps");
+                    cmdpacket_encrypt(p, 0, sps);
                     send_cmd(sockfd, p);
                     free(p);
+                } else if(!strcmp(buf, "md5")) {
+                    if(strlen(buf+4) != 32) puts("md5 len mismatch.");
+                    else {
+                        p->cmd = CMDMD5;
+                        p->datalen = 16;
+                        for(int i = 0; i < 16; i++) sscanf(buf+4+i*2, "%02x", &p->data[i]);
+                        printf("Read md5:");
+                        for(int i = 0; i < 16; i++) printf("%02x", (uint8_t)(p->data[i]));
+                        putchar('\n');
+                        cmdpacket_encrypt(p, 0, pwd);
+                        send_cmd(sockfd, p);
+                        free(p);
+                    }
                 } else if(!strcmp(buf, "end")) {
-                    CMDPACKET* p = malloc(CMDPACKET_HEAD_LEN+strlen(buf+4));
                     p->cmd = CMDEND;
                     p->datalen = 4;
                     memcpy(p->data, "fill", p->datalen);
-                    cmdpacket_encrypt(p, 0, "testpwd");
+                    cmdpacket_encrypt(p, 0, pwd);
                     send_cmd(sockfd, p);
                     free(p);
                     exit(EXIT_SUCCESS);
