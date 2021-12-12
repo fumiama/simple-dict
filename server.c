@@ -138,7 +138,9 @@ static int send_all(THREADTIMER *timer) {
         char* buf = (char*)malloc(file_size);
         if(buf) {
             if(fread(buf, file_size, 1, fp) == 1) {
-                //printf("Get dict file size: %zu\n", file_size);
+                #ifdef DEBUG
+                    printf("Get dict file size: %zu\n", file_size);
+                #endif
                 char* encbuf = raw_encrypt(buf, &file_size, timer->index, cfg->pwd);
                 sprintf(timer->dat, "%zu$", file_size);
                 //printf("Get encrypted file size: %s\n", timer->dat);
@@ -198,9 +200,10 @@ static int s2_set(THREADTIMER *timer) {
 static int s3_set_data(THREADTIMER *timer) {
     //timer->status = 0;
     uint32_t datasize = (timer->numbytes > (DICTDATSZ-1))?(DICTDATSZ-1):timer->numbytes;
-    //printf("Set data size: %u\n", datasize);
+    #ifdef DEBUG
+        printf("Set data size: %u\n", datasize);
+    #endif
     memcpy(d.data, timer->dat, datasize);
-    puts("Data copy to dict succ");
     if(!set_pb(get_dict_fp(timer->index), items_len, sizeof(DICT), &d)) {
         printf("Error set data: dict[%s]=%s\n", d.key, timer->dat);
         return close_and_send(timer, "erro", 4);
@@ -234,7 +237,9 @@ static int s4_del(THREADTIMER *timer) {
                     }
                 } else {
                     uint32_t cap = end - next;
-                    //printf("this: %u, next: %u, end: %u, cap: %u\n", this, next, end, cap);
+                    #ifdef DEBUG
+                        printf("this: %u, next: %u, end: %u, cap: %u\n", this, next, end, cap);
+                    #endif
                     char* data = malloc(cap);
                     if(data) {
                         fseek(fp, next, SEEK_SET);
@@ -342,63 +347,79 @@ static void handle_accept(void *p) {
                 ) {
                 touch_timer(p);
                 offset += numbytes;
-                //printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+                #ifdef DEBUG
+                    printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+                #endif
                 if(offset < CMDPACKET_HEAD_LEN) break;
                 if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
                     numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
                     if(numbytes <= 0) break;
                     else {
                         offset += numbytes;
-                        //printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+                        #ifdef DEBUG
+                            printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+                        #endif
                     }
                 }
                 numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
                 if(offset < numbytes) break;
-                //printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
-                if(cp->cmd < 5 && cmdpacket_decrypt(cp, index, cfg->pwd)) {
-                    cp->data[cp->datalen] = 0;
-                    timer_pointer_of(p)->dat = (char*)cp->data;
-                    timer_pointer_of(p)->numbytes = cp->datalen;
-                    printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
-                    switch(cp->cmd) {
-                        case CMDGET:
-                            //timer_pointer_of(p)->status = 1;
-                            if(!s1_get(timer_pointer_of(p))) goto CONV_END;
+                #ifdef DEBUG
+                    printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
+                #endif
+                if(cp->cmd < 5) {
+                    if(cmdpacket_decrypt(cp, index, cfg->pwd)) {
+                        cp->data[cp->datalen] = 0;
+                        timer_pointer_of(p)->dat = (char*)cp->data;
+                        timer_pointer_of(p)->numbytes = cp->datalen;
+                        printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
+                        switch(cp->cmd) {
+                            case CMDGET:
+                                //timer_pointer_of(p)->status = 1;
+                                if(!s1_get(timer_pointer_of(p))) goto CONV_END;
+                            break;
+                            case CMDCAT:
+                                if(!send_all(timer_pointer_of(p))) goto CONV_END;
+                            break;
+                            case CMDMD5:
+                                //timer_pointer_of(p)->status = 5;
+                                if(!s5_md5(timer_pointer_of(p))) goto CONV_END;
+                            break;
+                            case CMDACK: break;
+                            case CMDEND:
+                            default: goto CONV_END; break;
+                        }
+                    } else {
+                        puts("Decrypt normal data failed.");
                         break;
-                        case CMDCAT:
-                            if(!send_all(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDMD5:
-                            //timer_pointer_of(p)->status = 5;
-                            if(!s5_md5(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDACK: break;
-                        case CMDEND:
-                        default: goto CONV_END; break;
                     }
-                } else if(cmdpacket_decrypt(cp, index, cfg->sps)) {
-                    cp->data[cp->datalen] = 0;
-                    timer_pointer_of(p)->dat = (char*)cp->data;
-                    timer_pointer_of(p)->numbytes = cp->datalen;
-                    printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
-                    switch(cp->cmd) {
-                        case CMDSET:
-                            //timer_pointer_of(p)->status = 2;
-                            if(!s2_set(timer_pointer_of(p))) goto CONV_END;
+                } else if(cp->cmd < 8) {
+                    if(cmdpacket_decrypt(cp, index, cfg->sps)) {
+                        cp->data[cp->datalen] = 0;
+                        timer_pointer_of(p)->dat = (char*)cp->data;
+                        timer_pointer_of(p)->numbytes = cp->datalen;
+                        printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
+                        switch(cp->cmd) {
+                            case CMDSET:
+                                //timer_pointer_of(p)->status = 2;
+                                if(!s2_set(timer_pointer_of(p))) goto CONV_END;
+                            break;
+                            case CMDDEL:
+                                //timer_pointer_of(p)->status = 4;
+                                if(!s4_del(timer_pointer_of(p))) goto CONV_END;
+                            break;
+                            case CMDDAT:
+                                if(timer_pointer_of(p)->lock_type == DICT_LOCK_EX) {
+                                    if(!s3_set_data(timer_pointer_of(p))) goto CONV_END;
+                                }
+                            break;
+                            default: goto CONV_END; break;
+                        }
+                    } else {
+                        puts("Decrypt super data failed.");
                         break;
-                        case CMDDEL:
-                            //timer_pointer_of(p)->status = 4;
-                            if(!s4_del(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDDAT:
-                            if(timer_pointer_of(p)->lock_type == DICT_LOCK_EX) {
-                                if(!s3_set_data(timer_pointer_of(p))) goto CONV_END;
-                            }
-                        break;
-                        default: goto CONV_END; break;
                     }
                 } else {
-                    puts("Decrypt data failed.");
+                    puts("Invalid command.");
                     break;
                 }
                 if(offset > numbytes) {
@@ -406,7 +427,9 @@ static void handle_accept(void *p) {
                     memmove(buff, buff+numbytes, offset);
                     numbytes = 0;
                 } else offset = 0;
-                //printf("Offset after analyzing packet: %zd\n", offset);
+                #ifdef DEBUG
+                    printf("Offset after analyzing packet: %zd\n", offset);
+                #endif
             }
             CONV_END: puts("Conversation end\n");
         } else puts("Error allocating buffer");
@@ -458,7 +481,6 @@ static void accept_client() {
                     timer->touch = time(NULL);
                     timer->ptr = NULL;
                     reset_seq(p);
-                    //puts("Reset seq succeed");
                     if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) puts("Error creating thread");
                     else puts("Creating thread succeeded");
                 }

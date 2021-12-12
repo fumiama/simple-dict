@@ -3,8 +3,6 @@
 #include <time.h>
 #include "crypto.h"
 
-//#define DEBUG
-
 // TEA encoding sumtable
 static const uint32_t sumtable[0x10] = {
 	0x9e3579b9,
@@ -74,7 +72,11 @@ char* raw_decrypt(const char* buf, off_t* len, int index, const char pwd[64]) {
     ((uint8_t*)tea)[15] = seqs[index];
     TEADAT* tout = tea_decrypt_native_endian(tea, sumtable, &tin);
     if(!tout) return NULL;
-    else seqs[index]++;
+    else if(tout->len <= 0) {
+        free(tout->ptr);
+        free(tout);
+        return NULL;
+    } else seqs[index]++;
 
     *len = tout->len;
     char* decbuf = (char*)malloc(*len);
@@ -149,6 +151,11 @@ int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
 
     TEADAT* tout = tea_decrypt_native_endian(tea, sumtable, &tin);
     if(!tout) return 0;
+    if(tout->len <= 0) {
+        free(tout->ptr);
+        free(tout);
+        return 0;
+    }
 
     uint8_t* datamd5 = md5(tout->data, tout->len);
     #ifdef DEBUG

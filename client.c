@@ -33,7 +33,9 @@ void getMessage(void *p) {
     int c = 0, offset = 0;
     CMDPACKET* cp = (CMDPACKET*)bufr;
     while(offset >= CMDPACKET_HEAD_LEN || (c = recv(sockfd, bufr+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0) {
-        //printf("Recv %d bytes.\n", c);
+        #ifdef DEBUG
+            printf("Recv %d bytes.\n", c);
+        #endif
         if(recv_bin) {
             if(~recv_bin) {
                 recv_bin = -1;
@@ -48,12 +50,16 @@ void getMessage(void *p) {
                 bufr[i] = 0;
                 off_t datalen;
                 sscanf(bufr, "%d", &datalen);
-                //printf("raw data len: %d\n", datalen);
+                #ifdef DEBUG
+                    printf("raw data len: %d\n", datalen);
+                #endif
                 char* data = malloc(datalen);
                 offset = c - ++i;
                 if(offset > 0) {
                     memcpy(data, bufr+i, offset);
-                    //printf("copy %d bytes data that had been received.\n", offset);
+                    #ifdef DEBUG
+                        printf("copy %d bytes data that had been received.\n", offset);
+                    #endif
                 }
                 else offset = 0;
                 if(datalen-offset == recv(sockfd, data+offset, datalen-offset, MSG_WAITALL)) {
@@ -75,22 +81,30 @@ void getMessage(void *p) {
             }
         } else {
             offset += c;
-            //printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+            #ifdef DEBUG
+                printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+            #endif
             if(offset < CMDPACKET_HEAD_LEN) break;
             if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
                 c = recv(sockfd, bufr+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
                 if(c <= 0) break;
                 else {
                     offset += c;
-                    //printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+                    #ifdef DEBUG
+                        printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+                    #endif
                 }
             }
             c = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
             if(offset < c) break;
-            //printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
+            #ifdef DEBUG
+                printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
+            #endif
             if(cmdpacket_decrypt(cp, 0, pwd)) {
                 cp->data[cp->datalen] = 0;
-                //printf("[normal] Get %u bytes packet with data: %s\n", offset, cp->data);
+                #ifdef DEBUG
+                    printf("[normal] Get %u bytes packet with data: %s\n", offset, cp->data);
+                #endif
                 switch(cp->cmd) {
                     case CMDACK:
                         printf("recv ack: %s\n", cp->data);
@@ -103,7 +117,9 @@ void getMessage(void *p) {
                 memmove(bufr, bufr+c, offset);
                 c = 0;
             } else offset = 0;
-            //printf("offset after analyzing packet: %zd\n", offset);
+            #ifdef DEBUG
+                printf("offset after analyzing packet: %zd\n", offset);
+            #endif
         }
     }
 }
@@ -115,10 +131,12 @@ off_t file_size_of(const char* fname) {
 }
 
 void send_cmd(int accept_fd, CMDPACKET* p) {
-    //printf("send %d bytes encrypted data with %d bytes head.\n", p->datalen, CMDPACKET_HEAD_LEN);
-    //printf("raw packet: ");
-    //for(int i = 0; i < CMDPACKET_HEAD_LEN+p->datalen; i++) printf("%02x", ((uint8_t*)p)[i]);
-    //putchar('\n');
+    #ifdef DEBUG
+        printf("send %d bytes encrypted data with %d bytes head.\n", p->datalen, CMDPACKET_HEAD_LEN);
+        printf("raw packet: ");
+        for(int i = 0; i < CMDPACKET_HEAD_LEN+p->datalen; i++) printf("%02x", ((uint8_t*)p)[i]);
+        putchar('\n');
+    #endif
     if(!~send(accept_fd, (void*)p, CMDPACKET_HEAD_LEN+p->datalen, 0)) puts("Send data error.");
     else puts("Send data succeed.");
 }
