@@ -1,5 +1,5 @@
 # simple-dict-server
-database["key"]="value"
+database["key"]="value" with tea encryption.
 
 # Compile
 You should first clone this project into a system with cmake & libpthread installed.
