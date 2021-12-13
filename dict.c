@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <stdlib.h>
-#include <simplemd5.h>
+#include <simplecrypto.h>
 #include "dict.h"
 #include "server.h"
 
@@ -21,6 +21,13 @@ static FILE* thread_fp[THREADCNT];
 
 int fill_md5() {
     size_t size = get_dict_size();
+    if(!size) {
+        if(dict_md5) free(dict_md5);
+        dict_md5 = malloc(16);
+        memset(dict_md5, 0, 16);
+        puts("Dict is empty, use all zero md5");
+        return 1;
+    }
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
         rewind(fp5);

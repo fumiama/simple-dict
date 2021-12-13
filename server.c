@@ -514,18 +514,37 @@ int main(int argc, char *argv[]) {
                     if(!fp) fp = fopen(argv[as_daemon?4:3], "wb+");
                     if(fp) {
                         fclose(fp);
-                        init_dict(argv[as_daemon?4:3]);
-                        fp = NULL;
-                        fp = fopen(argv[as_daemon?5:4], "rb");
-                        if(fp) {
-                            SIMPLE_PB* spb = get_pb(fp);
-                            cfg = (CONFIG*)spb->target;
-                            fclose(fp);
-                            items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
-                            if(items_len) {
-                                if(bind_server(port, times)) if(listen_socket(times)) accept_client();
-                            } else puts("Align struct error.");
-                        } else printf("Error opening config file: %s\n", argv[as_daemon?5:4]);
+                        if(init_dict(argv[as_daemon?4:3])) {
+                            fp = NULL;
+                            if(argv[as_daemon?5:4][0] == '-') { // use env
+                                fp = (FILE*)1;
+                                cfg = (CONFIG*)malloc(sizeof(CONFIG));
+                                puts("Read config from env.");
+                                char* pwd = getenv("SDS_PWD");
+                                if(pwd) {
+                                    char* sps = getenv("SDS_SPS");
+                                    if(sps) {
+                                        strncpy(cfg->pwd, pwd, 64);
+                                        strncpy(cfg->sps, sps, 64);
+                                        cfg->pwd[63] = 0;
+                                        cfg->sps[63] = 0;
+                                        fp = (FILE*)-1;
+                                    } else puts("Env SDS_SPS is null.");
+                                } else puts("Env SDS_PWD is null.");
+                            }
+                            if(!fp) fp = fopen(argv[as_daemon?5:4], "rb");
+                            if(fp && ((int)fp-1)) {
+                                if(~((int)fp)) {
+                                    SIMPLE_PB* spb = get_pb(fp);
+                                    cfg = (CONFIG*)spb->target;
+                                    fclose(fp);
+                                }
+                                items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
+                                if(items_len) {
+                                    if(bind_server(port, times)) if(listen_socket(times)) accept_client();
+                                } else puts("Align struct error.");
+                            } else printf("Error opening config file: %s\n", argv[as_daemon?5:4]);
+                        }
                     } else printf("Error opening dict file: %s\n", argv[as_daemon?4:3]);
                 } else puts("Start daemon error");
             } else printf("Error times: %d\n", times);
