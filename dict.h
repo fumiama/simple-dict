@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define DICTKEYSZ  64
-#define DICTDATSZ 64
+#define DICTKEYSZ 127
+#define DICTDATSZ 127
 struct DICT {
     char key[DICTKEYSZ];
     char data[DICTDATSZ];
