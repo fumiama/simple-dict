@@ -21,6 +21,7 @@ void close_dict(uint8_t lock_type, uint32_t index);
 int fill_md5();
 FILE* get_dict_fp(uint32_t index);
 off_t get_dict_size();
+FILE* get_unique_dict_fp();
 int is_md5_equal(uint8_t* digest);
 FILE *open_dict(uint8_t lock_type, uint32_t index);
 

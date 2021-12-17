@@ -90,6 +90,10 @@ FILE* get_dict_fp(uint32_t index) {
     else return NULL;
 }
 
+FILE* get_unique_dict_fp() {
+    return fp5;
+}
+
 void close_dict(uint8_t lock_type, uint32_t index) {
     puts("Close dict");
     lock &= ~lock_type;

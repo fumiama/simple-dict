@@ -550,6 +550,7 @@ static void accept_client() {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, 1);
     init_crypto();
+    init_dict_pool(get_unique_dict_fp());
     if(pid < 0) puts("Error when forking a subprocess.");
     else while(1) {
         puts("Ready for accept, waitting...");
@@ -612,7 +613,6 @@ int main(int argc, char *argv[]) {
                     fp = fopen(argv[as_daemon?4:3], "rb+");
                     if(!fp) fp = fopen(argv[as_daemon?4:3], "wb+");
                     if(fp) {
-                        init_dict_pool(fp);
                         fclose(fp);
                         if(init_dict(argv[as_daemon?4:3])) {
                             fp = NULL;
