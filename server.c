@@ -45,9 +45,15 @@ typedef struct THREADTIMER THREADTIMER;
 static int fd;      // server fd
 static pthread_t accept_threads[THREADCNT];
 static DICT d;
+static DICT* setdict;
 static uint32_t* items_len;
 static CONFIG* cfg;
 static pthread_attr_t attr;
+
+// DICTPOOLBYTE must lower than 4*8 = 32
+#define DICTPOOLBIT 24
+#define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
+static DICT* dict_pool[DICTPOOLSZ+1];
 
 #define showUsage(program) printf("Usage: %s [-d] listen_port try_times dict_file config_file\n\t-d: As daemon\n", program)
 
@@ -55,9 +61,11 @@ static void accept_client();
 static void accept_timer(void *p);
 static int bind_server(uint16_t port, int try_times);
 static int close_and_send(THREADTIMER* timer, char *data, size_t numbytes);
+static void del(FILE *fp, char* key, int len, char ret[4]);
 static void handle_accept(void *accept_fd_p);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
+static void init_dict_pool(FILE *fp);
 static void kill_thread(THREADTIMER* timer);
 static uint32_t last_nonnull(char* p, uint32_t max_size);
 static int listen_socket(int try_times);
@@ -119,12 +127,14 @@ static int send_data(int accept_fd, int index, char *data, size_t length) {
     p->datalen = length;
     memcpy(p->data, data, p->datalen);
     cmdpacket_encrypt(p, index, cfg->pwd);
-    if(!~send(accept_fd, buf, CMDPACKET_HEAD_LEN+p->datalen, 0)) {
+    int total = CMDPACKET_HEAD_LEN+p->datalen;
+    if(!~send(accept_fd, buf, total, 0)) {
         puts("Send data error");
         return 0;
     } else {
-        printf("Send data: ");
-        puts(data);
+        printf("Send %d bytes data: ", total);
+        for(int i = 0; i < length; i++) putchar(data[i]);
+        putchar('\n');
         return 1;
     }
 }
@@ -162,12 +172,52 @@ static int send_all(THREADTIMER *timer) {
 
 #define has_next(fp, ch) ((ch=getc(fp)),(feof(fp)?0:(ungetc(ch,fp),1)))
 
+static void init_dict_pool(FILE *fp) {
+    int ch;
+    while(has_next(fp, ch)) {
+        SIMPLE_PB* spb = get_pb(fp);
+        DICT* d = (DICT*)spb->target;
+        DICT* dnew = (DICT*)malloc(sizeof(DICT));
+        memcpy(dnew, d, sizeof(DICT));
+
+        char* digest = md5(d->key, strlen(d->key)+1);
+        char* dp = digest;
+        int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
+        uint32_t c = 16-DICTPOOLSZ/8;
+        char* slot;
+
+        while((slot=dict_pool[p]) && c--) p = ((*((uint32_t*)++dp))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+        #ifdef DEBUG
+            printf("digest of %s: %08x is %svalid.\n",d->key, p, slot?"in":"");
+        #endif
+        if(!slot) dict_pool[p] = dnew; // 解决哈希冲突
+        else free(dnew); // 未解决哈希冲突
+
+        free(spb);
+        free(digest);
+    }
+}
+
 static int s1_get(THREADTIMER *timer) {
     FILE *fp = open_dict(DICT_LOCK_SH, timer->index);
     //timer->status = 0;
     if(fp) {
         int ch;
         timer->lock_type = DICT_LOCK_SH;
+
+        char* digest = md5(timer->dat, strlen(timer->dat)+1);
+        char* dp = digest;
+        int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
+        if(!dict_pool[p]) return close_and_send(timer, "null", 4);
+
+        uint32_t c = 16-DICTPOOLSZ/8;
+        int notok = 1;
+        while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c--) p = ((*((uint32_t*)++dp))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+        free(digest);
+        if(!notok) {
+            return close_and_send(timer, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
+        }
+
         while(has_next(fp, ch)) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
@@ -185,9 +235,33 @@ static int s2_set(THREADTIMER *timer) {
     FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
     if(fp) {
         timer->lock_type = DICT_LOCK_EX;
+
+        char* digest = md5(timer->dat, strlen(timer->dat)+1);
+        char* dp = digest;
+        int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
+
+        if(!dict_pool[p]) setdict = dict_pool[p] = (DICT*)malloc(sizeof(DICT));
+        else {
+            uint32_t c = 16-DICTPOOLSZ/8;
+            int notok;
+            while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c--) p = ((*((uint32_t*)++dp))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+            free(digest);
+            if(!dict_pool[p]) setdict = dict_pool[p] = (DICT*)malloc(sizeof(DICT)); // 无值
+            else if(notok) setdict = &d; // 全部冲突
+            else { // 已有值
+                char ret[4];
+                del(fp, timer->dat, timer->numbytes+1, ret); // 先删去
+                if(*(uint32_t*)ret == *(uint32_t*)"erro") return close_and_send(timer, "erro", 4);
+                setdict = dict_pool[p];
+            }
+        }
+        #ifdef DEBUG
+            printf("item %s(%0*x) will fill into %p.\n", timer->dat, DICTPOOLBIT/4, p, dict_pool[p]);
+        #endif
+
         //timer->status = 3;
-        memset(&d, 0, sizeof(DICT));
-        strncpy(d.key, timer->dat, DICTKEYSZ-1);
+        memset(setdict, 0, sizeof(DICT));
+        strncpy(setdict->key, timer->dat, DICTKEYSZ-1);
         fseek(fp, 0, SEEK_END);
         return send_data(timer->accept_fd, timer->index, "data", 4);
     } else {
@@ -203,63 +277,88 @@ static int s3_set_data(THREADTIMER *timer) {
     #ifdef DEBUG
         printf("Set data size: %u\n", datasize);
     #endif
-    memcpy(d.data, timer->dat, datasize);
-    if(!set_pb(get_dict_fp(timer->index), items_len, sizeof(DICT), &d)) {
-        printf("Error set data: dict[%s]=%s\n", d.key, timer->dat);
+    memcpy(setdict->data, timer->dat, datasize);
+
+    if(!set_pb(get_dict_fp(timer->index), items_len, sizeof(DICT), setdict)) {
+        printf("Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
         return close_and_send(timer, "erro", 4);
     } else {
-        printf("Set data: dict[%s]=%s\n", d.key, timer->dat);
+        printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
         return close_and_send(timer, "succ", 4);
     }
+}
+
+static void del(FILE *fp, char* key, int len, char ret[4]) {
+    int ch;
+    while(has_next(fp, ch)) {
+        SIMPLE_PB* spb = get_pb(fp);
+        DICT* d = (DICT*)spb->target;
+        if(!memcmp(key, d->key, len)) {
+            uint32_t next = ftell(fp);
+            uint32_t this = next - spb->real_len;
+            fseek(fp, 0, SEEK_END);
+            uint32_t end = ftell(fp);
+            if(next == end) {
+                if(!ftruncate(fileno(fp), end - spb->real_len)) {
+                    free(spb);
+                    *(uint32_t*)ret = *(uint32_t*)"succ";
+                    return;
+                } else {
+                    free(spb);
+                    *(uint32_t*)ret = *(uint32_t*)"erro";
+                    return;
+                }
+            } else {
+                uint32_t cap = end - next;
+                #ifdef DEBUG
+                    printf("this: %u, next: %u, end: %u, cap: %u\n", this, next, end, cap);
+                #endif
+                char* data = malloc(cap);
+                if(data) {
+                    fseek(fp, next, SEEK_SET);
+                    if(fread(data, cap, 1, fp) == 1) {
+                        if(!ftruncate(fileno(fp), end - spb->real_len)) {
+                            fseek(fp, this, SEEK_SET);
+                            if(fwrite(data, cap, 1, fp) == 1) {
+                                free(data);
+                                free(spb);
+                                *(uint32_t*)ret = *(uint32_t*)"succ";
+                                return;
+                            }
+                        }
+                    }
+                    free(data);
+                }
+                free(spb);
+                *(uint32_t*)ret = *(uint32_t*)"erro";
+                return;
+            }
+        } else free(spb);
+    }
+    *(uint32_t*)ret = *(uint32_t*)"null";
+    return;
 }
 
 static int s4_del(THREADTIMER *timer) {
     FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
     //timer->status = 0;
     if(fp) {
-        int ch;
+        char ret[4];
         timer->lock_type = DICT_LOCK_EX;
-        while(has_next(fp, ch)) {
-            SIMPLE_PB* spb = get_pb(fp);
-            DICT* d = (DICT*)spb->target;
-            if(!memcmp(timer->dat, d->key, timer->numbytes+1)) {
-                uint32_t next = ftell(fp);
-                uint32_t this = next - spb->real_len;
-                fseek(fp, 0, SEEK_END);
-                uint32_t end = ftell(fp);
-                if(next == end) {
-                    if(!ftruncate(fileno(fp), end - spb->real_len)) {
-                        free(spb);
-                        return close_and_send(timer, "succ", 4);
-                    } else {
-                        free(spb);
-                        return close_and_send(timer, "erro", 4);
-                    }
-                } else {
-                    uint32_t cap = end - next;
-                    #ifdef DEBUG
-                        printf("this: %u, next: %u, end: %u, cap: %u\n", this, next, end, cap);
-                    #endif
-                    char* data = malloc(cap);
-                    if(data) {
-                        fseek(fp, next, SEEK_SET);
-                        if(fread(data, cap, 1, fp) == 1) {
-                            if(!ftruncate(fileno(fp), end - spb->real_len)) {
-                                fseek(fp, this, SEEK_SET);
-                                if(fwrite(data, cap, 1, fp) == 1) {
-                                    free(data);
-                                    free(spb);
-                                    return close_and_send(timer, "succ", 4);
-                                }
-                            }
-                        }
-                        free(data);
-                    }
-                    free(spb);
-                    return close_and_send(timer, "erro", 4);
-                }
-            } else free(spb);
-        }
+
+        char* digest = md5(timer->dat, strlen(timer->dat)+1);
+        char* dp = digest;
+        int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
+        uint32_t c = 16-DICTPOOLSZ/8;
+        int notok = 1;
+        while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c--) p = ((*((uint32_t*)++dp))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+        free(digest);
+        if(notok) return close_and_send(timer, "null", 4);
+        free(dict_pool[p]);
+        dict_pool[p] = NULL;
+
+        del(fp, timer->dat, timer->numbytes+1, ret);
+        return close_and_send(timer, ret, 4);
     }
     return close_and_send(timer, "null", 4);
 }
@@ -513,6 +612,7 @@ int main(int argc, char *argv[]) {
                     fp = fopen(argv[as_daemon?4:3], "rb+");
                     if(!fp) fp = fopen(argv[as_daemon?4:3], "wb+");
                     if(fp) {
+                        init_dict_pool(fp);
                         fclose(fp);
                         if(init_dict(argv[as_daemon?4:3])) {
                             fp = NULL;

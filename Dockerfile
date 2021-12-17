@@ -22,7 +22,9 @@ RUN git clone --depth=1 https://github.com/fumiama/simple-protobuf.git \
 
 RUN rm -rf *
 
-COPY ./ .
+COPY ./*.c .
+COPY ./*.h .
+COPY ./CMakeLists.txt .
 
 RUN mkdir build \
   && cd build \
