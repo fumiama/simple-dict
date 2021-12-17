@@ -91,6 +91,7 @@ FILE* get_dict_fp(uint32_t index) {
 }
 
 FILE* get_unique_dict_fp() {
+    rewind(fp5);
     return fp5;
 }
 
