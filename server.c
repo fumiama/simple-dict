@@ -51,7 +51,7 @@ static CONFIG* cfg;
 static pthread_attr_t attr;
 
 // DICTPOOLBYTE must lower than 4*8 = 32
-#define DICTPOOLBIT 24
+#define DICTPOOLBIT 16
 #define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
 static DICT* dict_pool[DICTPOOLSZ+1];
 
