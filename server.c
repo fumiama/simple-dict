@@ -170,11 +170,12 @@ static int send_all(THREADTIMER *timer) {
     return re;
 }
 
-#define has_next(fp, ch) ((ch=getc(fp)),(feof(fp)?0:(ungetc(ch,fp),1)))
+#define has_next(fp, ch) ((ch=getc(fp)),(feof(fp)?0:(ch?ungetc(ch,fp):1)))
 
 static void init_dict_pool(FILE *fp) {
     int ch;
     while(has_next(fp, ch)) {
+        if(!ch) continue; // skip null bytes
         SIMPLE_PB* spb = get_pb(fp);
         DICT* d = (DICT*)spb->target;
         DICT* dnew = (DICT*)malloc(sizeof(DICT));
@@ -219,6 +220,7 @@ static int s1_get(THREADTIMER *timer) {
         }
 
         while(has_next(fp, ch)) {
+            if(!ch) continue; // skip null bytes
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
             if(!strcmp(timer->dat, d->key)) {
@@ -291,6 +293,7 @@ static int s3_set_data(THREADTIMER *timer) {
 static void del(FILE *fp, char* key, int len, char ret[4]) {
     int ch;
     while(has_next(fp, ch)) {
+        if(!ch) continue; // skip null bytes
         SIMPLE_PB* spb = get_pb(fp);
         DICT* d = (DICT*)spb->target;
         if(!memcmp(key, d->key, len)) {
