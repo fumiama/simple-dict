@@ -187,9 +187,17 @@ static void init_dict_pool(FILE *fp) {
         uint32_t c = 16-DICTPOOLSZ/8;
         char* slot;
 
-        while((slot=dict_pool[p]) && c--) p = ((*((uint32_t*)++dp))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+        while((slot=dict_pool[p]) && c--) {
+            #ifdef DEBUG
+                printf("digest of %s: %08x got conflicted.\n",d->key, p);
+            #endif
+            p = ((*((uint32_t*)++dp))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+            #ifdef DEBUG
+                printf("skip digest of %s to %08x.\n",d->key, p);
+            #endif
+        }
         #ifdef DEBUG
-            printf("digest of %s: %08x is %svalid.\n",d->key, p, slot?"in":"");
+            if(slot) printf("digest of %s: %08x is invalid, drop it.\n",d->key, p);
         #endif
         if(!slot) dict_pool[p] = dnew; // 解决哈希冲突
         else free(dnew); // 未解决哈希冲突
@@ -540,7 +548,7 @@ static void handle_accept(void *p) {
     } else puts("Error accepting client");
 }
 
-pid_t pid;
+static pid_t pid;
 static void accept_client() {
     pid = fork();
     while (pid > 0) {      //主进程监控子进程状态，如果子进程异常终止则重启之
