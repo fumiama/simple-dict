@@ -559,7 +559,7 @@ static void accept_client() {
     signal(SIGQUIT, handle_quit);
     signal(SIGPIPE, handle_pipe);
     pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, 1);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
     init_dict_pool(get_unique_dict_fp());
     if(pid < 0) puts("Error when forking a subprocess.");
