@@ -19,17 +19,17 @@ message(STATUS "optional:-std=c99")
 
 add_executable(simple-dict-server server.c dict.c crypto.c)
 add_executable(simple-dict-client client.c crypto.c)
-add_executable(migrate migrate.c)
-add_executable(migratenew migratenew.c)
 add_executable(cfgwriter cfgwriter.c)
+#add_executable(migrate migrate.c)
+#add_executable(migratenew migratenew.c)
 
 target_link_libraries(simple-dict-server scrypto spb pthread)
 target_link_libraries(simple-dict-client scrypto pthread)
-target_link_libraries(migrate spb)
-target_link_libraries(migratenew spb)
 target_link_libraries(cfgwriter spb)
+
+#target_link_libraries(migrate spb)
+#target_link_libraries(migratenew spb)
 
 INSTALL(TARGETS simple-dict-server RUNTIME DESTINATION bin)
 #INSTALL(TARGETS simple-dict-client RUNTIME DESTINATION bin)
-#INSTALL(TARGETS migrate RUNTIME DESTINATION bin)
 #INSTALL(TARGETS cfgwriter RUNTIME DESTINATION bin)
