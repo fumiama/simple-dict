@@ -48,8 +48,8 @@ void getMessage(void *p) {
                 while(bufr[i] != '$') i++;
                 while(bufr[i] != '$') recv(sockfd, bufr+i++, 1, MSG_WAITALL);
                 bufr[i] = 0;
-                off_t datalen;
-                sscanf(bufr, "%d", &datalen);
+                unsigned int datalen;
+                sscanf(bufr, "%u", &datalen);
                 #ifdef DEBUG
                     printf("raw data len: %d\n", datalen);
                 #endif
@@ -66,11 +66,12 @@ void getMessage(void *p) {
                     //FILE* fp = fopen("raw_before_dec", "wb+");
                     //fwrite(data, datalen, 1, fp);
                     //fclose(fp);
-                    char* newdata = raw_decrypt(data, &datalen, 0, pwd);
+                    off_t tmp = datalen;
+                    char* newdata = raw_decrypt(data, &tmp, 0, pwd);
                     if(newdata) {
-                        printf("raw data len after decode: %d\n", datalen);
+                        printf("raw data len after decode: %d\n", (int)tmp);
                         FILE* fp = fopen(savepath, "wb+");
-                        fwrite(newdata, datalen, 1, fp);
+                        fwrite(newdata, (size_t)tmp, 1, fp);
                         fclose(fp);
                         free(newdata);
                         puts("recv raw data succeed.");
@@ -186,7 +187,7 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                         else puts("Send file error.");
                     #endif
                     fclose(fp);
-                    printf("Send count: %u\n", len);
+                    printf("Send count: %d\n", (int)len);
                 } else puts("Open file error!");
             }
             else {
@@ -233,7 +234,7 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                     else {
                         p->cmd = CMDMD5;
                         p->datalen = 16;
-                        for(int i = 0; i < 16; i++) sscanf(buf+4+i*2, "%02x", &p->data[i]);
+                        for(int i = 0; i < 16; i++) sscanf(buf+4+i*2, "%02x", (unsigned int*)&p->data[i]);
                         printf("Read md5:");
                         for(int i = 0; i < 16; i++) printf("%02x", (uint8_t)(p->data[i]));
                         putchar('\n');

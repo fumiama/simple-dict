@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <simple_protobuf.h>
+#include <types.h>
 
 #define DICTKEYSZOLD 64
 #define DICTDATSZOLD 64

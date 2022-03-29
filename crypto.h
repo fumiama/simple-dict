@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <simplecrypto.h>
+#include <types.h>
 #include "server.h"
 
 void init_crypto();
