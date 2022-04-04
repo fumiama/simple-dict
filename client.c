@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 #include <pthread.h>
+#include <unistd.h>
 #include "crypto.h"
 
 #if !__APPLE__
@@ -83,7 +84,7 @@ void getMessage(void *p) {
         } else {
             offset += c;
             #ifdef DEBUG
-                printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+                printf("[handle] Get %d bytes, total: %d.\n", c, offset);
             #endif
             if(offset < CMDPACKET_HEAD_LEN) break;
             if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
@@ -92,14 +93,14 @@ void getMessage(void *p) {
                 else {
                     offset += c;
                     #ifdef DEBUG
-                        printf("[handle] Get %zd bytes, total: %zd.\n", c, offset);
+                        printf("[handle] Get %d bytes, total: %d.\n", c, offset);
                     #endif
                 }
             }
             c = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
             if(offset < c) break;
             #ifdef DEBUG
-                printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
+                printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
             #endif
             if(cmdpacket_decrypt(cp, 0, pwd)) {
                 cp->data[cp->datalen] = 0;
@@ -119,7 +120,7 @@ void getMessage(void *p) {
                 c = 0;
             } else offset = 0;
             #ifdef DEBUG
-                printf("offset after analyzing packet: %zd\n", offset);
+                printf("offset after analyzing packet: %d\n", offset);
             #endif
         }
     }

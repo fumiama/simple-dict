@@ -149,10 +149,10 @@ static int send_all(THREADTIMER *timer) {
         if(buf) {
             if(fread(buf, file_size, 1, fp) == 1) {
                 #ifdef DEBUG
-                    printf("Get dict file size: %zu\n", file_size);
+                    printf("Get dict file size: %u\n", (unsigned int)file_size);
                 #endif
                 char* encbuf = raw_encrypt(buf, &file_size, timer->index, cfg->pwd);
-                sprintf(timer->dat, "%zu$", file_size);
+                sprintf(timer->dat, "%u$", (unsigned int)file_size);
                 //printf("Get encrypted file size: %s\n", timer->dat);
                 //FILE* fp = fopen("raw_after_enc", "wb+");
                 //fwrite(encbuf, file_size, 1, fp);
@@ -181,11 +181,11 @@ static void init_dict_pool(FILE *fp) {
         DICT* dnew = (DICT*)malloc(sizeof(DICT));
         memcpy(dnew, d, sizeof(DICT));
 
-        char* digest = md5(d->key, strlen(d->key)+1);
+        char* digest = (char*)md5((uint8_t *)d->key, strlen(d->key)+1);
         char* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
         uint32_t c = 16-DICTPOOLSZ/8;
-        char* slot;
+        DICT* slot;
 
         while((slot=dict_pool[p]) && c--) {
             #ifdef DEBUG
@@ -214,7 +214,7 @@ static int s1_get(THREADTIMER *timer) {
         int ch;
         timer->lock_type = DICT_LOCK_SH;
 
-        char* digest = md5(timer->dat, strlen(timer->dat)+1);
+        char* digest = (char*)md5((uint8_t*)timer->dat, strlen(timer->dat)+1);
         char* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
         if(!dict_pool[p]) return close_and_send(timer, "null", 4);
@@ -246,7 +246,7 @@ static int s2_set(THREADTIMER *timer) {
     if(fp) {
         timer->lock_type = DICT_LOCK_EX;
 
-        char* digest = md5(timer->dat, strlen(timer->dat)+1);
+        char* digest = (char*)md5((uint8_t*)timer->dat, strlen(timer->dat)+1);
         char* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
 
@@ -357,7 +357,7 @@ static int s4_del(THREADTIMER *timer) {
         char ret[4];
         timer->lock_type = DICT_LOCK_EX;
 
-        char* digest = md5(timer->dat, strlen(timer->dat)+1);
+        char* digest = (char*)md5((uint8_t*)timer->dat, strlen(timer->dat)+1);
         char* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
         uint32_t c = 16-DICTPOOLSZ/8;
@@ -395,7 +395,7 @@ static void accept_timer(void *p) {
     while(accept_threads[index] && !pthread_kill(accept_threads[index], 0)) {
         sleep(MAXWAITSEC / 4);
         time_t waitsec = time(NULL) - timer->touch;
-        printf("Wait sec: %u, max: %u\n", waitsec, MAXWAITSEC);
+        printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
         if(waitsec > MAXWAITSEC) break;
     }
     puts("Call kill thread");
@@ -474,7 +474,7 @@ static void handle_accept(void *p) {
                 numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
                 if(offset < numbytes) break;
                 #ifdef DEBUG
-                    printf("[handle] Decrypt %zd bytes data...\n", cp->datalen);
+                    printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
                 #endif
                 if(cp->cmd < 5) {
                     if(cmdpacket_decrypt(cp, index, cfg->pwd)) {

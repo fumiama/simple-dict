@@ -162,7 +162,7 @@ int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
         printf("decrypt md5: ");
         for(int i = 0; i < 16; i++) printf("%02x", datamd5[i]);
         putchar('\n');
-        printf("decrypted data len: %d, data: ", tout->len);
+        printf("decrypted data len: %u, data: ", (unsigned int)tout->len);
         for(int i = 0; i < tout->len; i++) printf("%02x", tout->data[i]);
         putchar('\n');
     #endif

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <stdlib.h>
+#include <string.h>
 #include <simplecrypto.h>
 #include "dict.h"
 #include "server.h"
