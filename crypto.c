@@ -108,14 +108,12 @@ void cmdpacket_encrypt(CMDPACKET* p, int index, const char pwd[64]) {
 
     TEADAT* tout = tea_encrypt_native_endian(tea, sumtable, &tin);
 
-    uint8_t* datamd5 = md5(p->data, p->datalen);
+    md5(p->data, p->datalen, p->md5);
     #ifdef DEBUG
         printf("encrypt md5: ");
-        for(int i = 0; i < 16; i++) printf("%02x", datamd5[i]);
+        for(int i = 0; i < 16; i++) printf("%02x", p->md5[i]);
         putchar('\n');
     #endif
-    memcpy(p->md5, datamd5, 16);
-    free(datamd5);
 
     p->datalen = tout->len;
     memcpy(p->data, tout->data, p->datalen);
@@ -156,8 +154,8 @@ int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
         free(tout);
         return 0;
     }
-
-    uint8_t* datamd5 = md5(tout->data, tout->len);
+    uint8_t datamd5[16];
+    md5(tout->data, tout->len, datamd5);
     #ifdef DEBUG
         printf("decrypt md5: ");
         for(int i = 0; i < 16; i++) printf("%02x", datamd5[i]);
@@ -166,16 +164,14 @@ int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
         for(int i = 0; i < tout->len; i++) printf("%02x", tout->data[i]);
         putchar('\n');
     #endif
-    if(is_md5_equal(datamd5, p->md5)) {
+    if(is_md5_equal((uint8_t*)datamd5, p->md5)) {
         seqs[index]++;
         p->datalen = tout->len;
         memcpy(p->data, tout->data, p->datalen);
-        free(datamd5);
         free(tout->ptr);
         free(tout);
         return 1;
     }
-    free(datamd5);
     free(tout->ptr);
     free(tout);
     return 0;

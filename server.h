@@ -1,8 +1,13 @@
 #ifndef _SERVER_H_
 #define _SERVER_H_
 
+#include <stdint.h>
+
 #define THREADCNT 16
 #define MAXWAITSEC 10
+
+// DICTPOOLBIT must be lower than 4*8 = 32
+#define DICTPOOLBIT 16
 
 enum SERVERCMD {CMDGET, CMDCAT, CMDMD5, CMDACK, CMDEND, CMDSET, CMDDEL, CMDDAT};
 
