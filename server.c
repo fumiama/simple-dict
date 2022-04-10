@@ -108,7 +108,7 @@ static int listen_socket(int try_times) {
         puts("Listen failed!");
         return 0;
     } else{
-        puts("Listening....");
+        puts("Listening...");
         return 1;
     }
 }
@@ -394,34 +394,30 @@ static void accept_timer(void *p) {
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
         if(waitsec > MAXWAITSEC) break;
     }
-    puts("Call kill thread");
-    kill_thread(timer);
-    puts("Free timer");
-    free(timer);
-    puts("Finish calling kill thread\n");
-}
-
-static void kill_thread(THREADTIMER* timer) {
-    puts("Start killing.");
-    uint32_t index = timer->index;
     pthread_t thread = accept_threads[index];
     if(thread) {
         pthread_kill(thread, SIGQUIT);
         accept_threads[index] = 0;
-        puts("Kill thread.");
+        puts("Kill thread");
     }
+}
+
+static void kill_thread(THREADTIMER* timer) {
+    puts("Start killing");
+    accept_threads[timer->index] = 0;
     if(timer->accept_fd) {
         close(timer->accept_fd);
         timer->accept_fd = 0;
-        puts("Close accept.");
+        puts("Close accept");
     }
     if(timer->ptr) {
         free(timer->ptr);
         timer->ptr = NULL;
-        puts("Free data.");
+        puts("Free data");
     }
     if(timer->lock_type) close_dict(timer->lock_type, timer->index);
-    puts("Finish killing.");
+    free(timer);
+    puts("Finish killing\n");
 }
 
 static void handle_pipe(int signo) {
@@ -432,8 +428,11 @@ static void handle_pipe(int signo) {
 static void handle_accept(void *p) {
     int accept_fd = timer_pointer_of(p)->accept_fd;
     if(accept_fd > 0) {
-        puts("\nConnected to the client.");
+        puts("\nConnected to the client");
         pthread_t thread;
+        pthread_key_t key;
+        pthread_key_create(&key, (void *)&kill_thread);
+        pthread_setspecific(key, p);
         if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
         //send_data(accept_fd, "Welcome to simple dict server.", 31);
@@ -495,7 +494,7 @@ static void handle_accept(void *p) {
                             default: goto CONV_END; break;
                         }
                     } else {
-                        puts("Decrypt normal data failed.");
+                        puts("Decrypt normal data failed");
                         break;
                     }
                 } else if(cp->cmd < 8) {
@@ -521,11 +520,11 @@ static void handle_accept(void *p) {
                             default: goto CONV_END; break;
                         }
                     } else {
-                        puts("Decrypt super data failed.");
+                        puts("Decrypt super data failed");
                         break;
                     }
                 } else {
-                    puts("Invalid command.");
+                    puts("Invalid command");
                     break;
                 }
                 if(offset > numbytes) {
@@ -537,10 +536,9 @@ static void handle_accept(void *p) {
                     printf("Offset after analyzing packet: %zd\n", offset);
                 #endif
             }
-            CONV_END: puts("Conversation end\n");
+            CONV_END: puts("Conversation end");
         } else puts("Error allocating buffer");
-        accept_threads[index] = 0;
-        kill_thread(timer_pointer_of(p));
+        puts("Thread exited normally");
     } else puts("Error accepting client");
 }
 
@@ -558,7 +556,7 @@ static void accept_client() {
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
     init_dict_pool(get_dict_fp_rd());
-    if(pid < 0) puts("Error when forking a subprocess.");
+    if(pid < 0) puts("Error when forking a subprocess");
     else while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;
@@ -570,7 +568,7 @@ static void accept_client() {
                 timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
                 if(timer->accept_fd <= 0) {
                     free(timer);
-                    puts("Accept client error.");
+                    puts("Accept client error");
                 } else {
                     #ifdef LISTEN_ON_IPV6
                         uint16_t port = ntohs(client_addr.sin6_port);
@@ -626,7 +624,7 @@ int main(int argc, char *argv[]) {
                             if(argv[as_daemon?5:4][0] == '-') { // use env
                                 fp = (FILE*)1;
                                 cfg = (CONFIG*)malloc(sizeof(CONFIG));
-                                puts("Read config from env.");
+                                puts("Read config from env");
                                 char* pwd = getenv("SDS_PWD");
                                 if(pwd) {
                                     char* sps = getenv("SDS_SPS");
@@ -636,8 +634,8 @@ int main(int argc, char *argv[]) {
                                         cfg->pwd[63] = 0;
                                         cfg->sps[63] = 0;
                                         fp = (FILE*)-1;
-                                    } else puts("Env SDS_SPS is null.");
-                                } else puts("Env SDS_PWD is null.");
+                                    } else puts("Env SDS_SPS is null");
+                                } else puts("Env SDS_PWD is null");
                             }
                             if(!fp) fp = fopen(argv[as_daemon?5:4], "rb");
                             if(fp && ((int)fp-1)) {
@@ -649,7 +647,7 @@ int main(int argc, char *argv[]) {
                                 items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
                                 if(items_len) {
                                     if(bind_server(port, times)) if(listen_socket(times)) accept_client();
-                                } else puts("Align struct error.");
+                                } else puts("Align struct error");
                             } else printf("Error opening config file: %s\n", argv[as_daemon?5:4]);
                         }
                     } else printf("Error opening dict file: %s\n", argv[as_daemon?4:3]);

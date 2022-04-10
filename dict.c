@@ -8,12 +8,11 @@
 #include "server.h"
 
 static pthread_rwlock_t mu;
-static int lock;
 static char* filepath;
 static uint8_t dict_md5[16];
 
 static FILE* fp = NULL;     //fp for EX
-static FILE* fp5 = NULL;    //fp for md5
+static FILE* fp_read = NULL;    //fp for md5
 static FILE* thread_fp[THREADCNT];
 
 #ifdef CPUBIT64
@@ -32,8 +31,8 @@ int fill_md5() {
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
         pthread_rwlock_rdlock(&mu);
-        rewind(fp5);
-        if(fread(dict_buff, size, 1, fp5) == 1) {
+        rewind(fp_read);
+        if(fread(dict_buff, size, 1, fp_read) == 1) {
             pthread_rwlock_unlock(&mu);
             md5(dict_buff, size, dict_md5);
             free(dict_buff);
@@ -52,14 +51,13 @@ int fill_md5() {
 
 int init_dict(char* file_path) {
     fp = fopen(file_path, "rb+");
-    fp5 = fopen(file_path, "rb");
+    fp_read = fopen(file_path, "rb");
     if(fp) {
         int err = pthread_rwlock_init(&mu, NULL);
         if(err) {
             puts("Init lock error");
             return 0;
         }
-        lock = DICT_LOCK_UN;
         filepath = file_path;
         return fill_md5();
     } else {
@@ -71,7 +69,6 @@ int init_dict(char* file_path) {
 FILE* open_dict(uint8_t lock_type, uint32_t index) {
     if(lock_type & DICT_LOCK_EX) {
         pthread_rwlock_wrlock(&mu);
-        lock |= DICT_LOCK_EX;
         if(!fp) fp = fopen(filepath, "rb+");
         else rewind(fp);
         return fp;
@@ -81,25 +78,22 @@ FILE* open_dict(uint8_t lock_type, uint32_t index) {
         return NULL;
     }
     pthread_rwlock_rdlock(&mu);
-    lock |= DICT_LOCK_SH;
     if(!thread_fp[index]) thread_fp[index] = fopen(filepath, "rb");
     else rewind(thread_fp[index]);
     return thread_fp[index];
 }
 
 FILE* get_dict_fp_wr() {
-    if(lock & DICT_LOCK_EX) return fp;
-    return NULL;
+    return fp;
 }
 
 FILE* get_dict_fp_rd() {
-    rewind(fp5);
-    return fp5;
+    rewind(fp_read);
+    return fp_read;
 }
 
 void close_dict(uint8_t lock_type, uint32_t index) {
     if(lock_type & DICT_LOCK_EX) fflush(fp);
-    lock &= ~lock_type;
     pthread_rwlock_unlock(&mu);
     puts("Close dict");
 }
