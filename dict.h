@@ -15,6 +15,7 @@ typedef struct DICT DICT;
 #define DICT_LOCK_UN 0x00
 #define DICT_LOCK_SH 0x01
 #define DICT_LOCK_EX 0x02
+#define DICT_LOCKING_EX 0x04
 
 void  close_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu);
 int   fill_md5(pthread_rwlock_t* mu);

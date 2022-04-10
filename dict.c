@@ -29,7 +29,10 @@ int fill_md5(pthread_rwlock_t* mu) {
     }
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
-        pthread_rwlock_rdlock(mu);
+        if(pthread_rwlock_tryrdlock(mu)) {
+            puts("Readlock busy");
+            return 0;
+        }
         rewind(fp_read);
         if(fread(dict_buff, size, 1, fp_read) == 1) {
             pthread_rwlock_unlock(mu);
@@ -66,7 +69,10 @@ int init_dict(char* file_path, pthread_rwlock_t* mu) {
 
 FILE* open_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {
     if(lock_type & DICT_LOCK_EX) {
-        pthread_rwlock_wrlock(mu);
+        if(pthread_rwlock_trywrlock(mu)) {
+            puts("Open dict: Writelock busy");
+            return NULL;
+        }
         if(!fp) fp = fopen(filepath, "rb+");
         else rewind(fp);
         return fp;
@@ -75,7 +81,10 @@ FILE* open_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {
         puts("Open dict: Index out of bounds");
         return NULL;
     }
-    pthread_rwlock_rdlock(mu);
+    if(pthread_rwlock_tryrdlock(mu)) {
+        puts("Open dict: Readlock busy");
+        return NULL;
+    }
     if(!thread_fp[index]) thread_fp[index] = fopen(filepath, "rb");
     else rewind(thread_fp[index]);
     return thread_fp[index];
@@ -98,12 +107,9 @@ void close_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {
 
 off_t get_dict_size(pthread_rwlock_t* mu) {
     struct stat statbuf;
-    pthread_rwlock_rdlock(mu);
     if(stat(filepath, &statbuf)==0) {
-        pthread_rwlock_unlock(mu);
         return statbuf.st_size;
     }
-    pthread_rwlock_unlock(mu);
     return -1;
 }
 

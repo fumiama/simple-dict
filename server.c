@@ -34,20 +34,23 @@
 
 struct THREADTIMER {
     uint32_t index;
-    time_t touch;
+    uint32_t lock_type;
     int accept_fd;
-    ssize_t numbytes;
     char *dat, *ptr;
-    char lock_type;
+    time_t touch;
+    ssize_t numbytes;
 };
 typedef struct THREADTIMER THREADTIMER;
+static THREADTIMER timers[THREADCNT];
+#define timer_pointer_of(x) ((THREADTIMER*)(x))
+#define touch_timer(x) timer_pointer_of(x)->touch = time(NULL)
 
 static int fd;      // server fd
 static pthread_t accept_threads[THREADCNT];
 static DICT d;
 static DICT* setdict;
 static uint32_t* items_len;
-static CONFIG* cfg;
+static CONFIG cfg;
 static pthread_attr_t attr;
 static pthread_rwlock_t mu;
 
@@ -125,7 +128,7 @@ static int send_data(int accept_fd, int index, char *data, size_t length) {
     p->cmd = CMDACK;
     p->datalen = length;
     memcpy(p->data, data, p->datalen);
-    cmdpacket_encrypt(p, index, cfg->pwd);
+    cmdpacket_encrypt(p, index, cfg.pwd);
     int total = CMDPACKET_HEAD_LEN+p->datalen;
     if(!~send(accept_fd, buf, total, 0)) {
         puts("Send data error");
@@ -140,32 +143,35 @@ static int send_data(int accept_fd, int index, char *data, size_t length) {
 
 static int send_all(THREADTIMER *timer) {
     int re = 1;
-    pthread_cleanup_push((void*)&pthread_rwlock_unlock, (void*)&mu);
     FILE *fp = open_dict(DICT_LOCK_SH, timer->index, &mu);
     if(!fp) return 1;
+    pthread_cleanup_push((void*)&pthread_rwlock_unlock, (void*)&mu);
     timer->lock_type = DICT_LOCK_SH;
     off_t len = 0, file_size = get_dict_size(&mu);
     char* buf = (char*)malloc(file_size);
     if(buf) {
+        pthread_cleanup_push((void*)&free, (void*)&buf);
         if(fread(buf, file_size, 1, fp) == 1) {
             #ifdef DEBUG
                 printf("Get dict file size: %u\n", (unsigned int)file_size);
             #endif
-            char* encbuf = raw_encrypt(buf, &file_size, timer->index, cfg->pwd);
+            char* encbuf = raw_encrypt(buf, &file_size, timer->index, cfg.pwd);
             sprintf(timer->dat, "%u$", (unsigned int)file_size);
             //printf("Get encrypted file size: %s\n", timer->dat);
             //FILE* fp = fopen("raw_after_enc", "wb+");
             //fwrite(encbuf, file_size, 1, fp);
             //fclose(fp);
+            pthread_cleanup_push((void*)&free, (void*)&encbuf);
             if(send(timer->accept_fd, timer->dat, strlen(timer->dat), 0) > 0) {
                 re = send(timer->accept_fd, encbuf, file_size, 0);
                 printf("Send %u bytes.\n", re);
             } else re = 0;
-            free(encbuf);
+            pthread_cleanup_pop(1);
         }
-        free(buf);
+        pthread_cleanup_pop(1);
     }
     close_dict(DICT_LOCK_SH, timer->index, &mu);
+    timer->lock_type = DICT_LOCK_UN;
     pthread_cleanup_pop(0);
     return re;
 }
@@ -233,8 +239,10 @@ static int s1_get(THREADTIMER *timer) {
             SIMPLE_PB* spb = get_pb(fp);
             DICT* d = (DICT*)spb->target;
             if(!strcmp(timer->dat, d->key)) {
-                int r = close_and_send(timer, d->data, last_nonnull(d->data, DICTDATSZ));
-                free(spb);
+                int r;
+                pthread_cleanup_push((void*)free, (void*)spb);
+                r = close_and_send(timer, d->data, last_nonnull(d->data, DICTDATSZ));
+                pthread_cleanup_pop(1);
                 return r;
             } else free(spb);
         }
@@ -246,9 +254,11 @@ static int s1_get(THREADTIMER *timer) {
 
 static int s2_set(THREADTIMER *timer) {
     uint8_t digest[16];
-    timer->lock_type = DICT_LOCK_EX;
+    timer->lock_type = DICT_LOCKING_EX;
     FILE *fp = open_dict(DICT_LOCK_EX, timer->index, &mu);
     if(fp) {
+        touch_timer(timer);
+        timer->lock_type = DICT_LOCK_EX;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
@@ -372,7 +382,6 @@ static int s4_del(THREADTIMER *timer) {
         del(fp, timer->dat, timer->numbytes+1, ret);
         return close_and_send(timer, ret, 4);
     }
-    timer->lock_type = DICT_LOCK_UN;
     return close_and_send(timer, "null", 4);
 }
 
@@ -388,9 +397,6 @@ static void handle_quit(int signo) {
     pthread_exit(NULL);
 }
 
-#define timer_pointer_of(x) ((THREADTIMER*)(x))
-#define touch_timer(x) timer_pointer_of(x)->touch = time(NULL)
-
 static void accept_timer(void *p) {
     THREADTIMER *timer = timer_pointer_of(p);
     uint32_t index = timer->index;
@@ -398,7 +404,7 @@ static void accept_timer(void *p) {
         sleep(MAXWAITSEC / 4);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
-        if(timer->lock_type == DICT_LOCK_EX) {
+        if(timer->lock_type >= DICT_LOCK_EX) {
             if(waitsec > MAXWAITSEC*THREADCNT) break;
         } else if(waitsec > MAXWAITSEC) break;
     }
@@ -423,7 +429,6 @@ static void kill_thread(THREADTIMER* timer) {
         puts("Free data");
     }
     if(timer->lock_type) close_dict(timer->lock_type, timer->index, &mu);
-    free(timer);
     puts("Finish killing");
 }
 
@@ -477,7 +482,7 @@ static void handle_accept(void *p) {
                     printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
                 #endif
                 if(cp->cmd < 5) {
-                    if(cmdpacket_decrypt(cp, index, cfg->pwd)) {
+                    if(cmdpacket_decrypt(cp, index, cfg.pwd)) {
                         cp->data[cp->datalen] = 0;
                         timer_pointer_of(p)->dat = (char*)cp->data;
                         timer_pointer_of(p)->numbytes = cp->datalen;
@@ -503,7 +508,7 @@ static void handle_accept(void *p) {
                         break;
                     }
                 } else if(cp->cmd < 8) {
-                    if(cmdpacket_decrypt(cp, index, cfg->sps)) {
+                    if(cmdpacket_decrypt(cp, index, cfg.sps)) {
                         cp->data[cp->datalen] = 0;
                         timer_pointer_of(p)->dat = (char*)cp->data;
                         timer_pointer_of(p)->numbytes = cp->datalen;
@@ -568,34 +573,31 @@ static void accept_client() {
         int p = 0;
         while(p < THREADCNT && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
         if(p < THREADCNT) {
-            printf("Next thread is No.%d\n", p);
-            THREADTIMER *timer = malloc(sizeof(THREADTIMER));
-            if(timer) {
-                timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
-                if(timer->accept_fd <= 0) {
-                    free(timer);
-                    puts("Accept client error");
-                } else {
-                    #ifdef LISTEN_ON_IPV6
-                        uint16_t port = ntohs(client_addr.sin6_port);
-                        struct in6_addr in = client_addr.sin6_addr;
-                        char str[INET6_ADDRSTRLEN];	// 46
-                        inet_ntop(AF_INET6, &in, str, sizeof(str));
-                    #else
-                        uint16_t port = ntohs(client_addr.sin_port);
-                        struct in_addr in = client_addr.sin_addr;
-                        char str[INET_ADDRSTRLEN];	// 16
-                        inet_ntop(AF_INET, &in, str, sizeof(str));
-                    #endif
-                    printf("Accept client %s:%u\n", str, port);
-                    timer->index = p;
-                    timer->touch = time(NULL);
-                    timer->ptr = NULL;
-                    reset_seq(p);
-                    if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) puts("Error creating thread");
-                    else puts("Creating thread succeeded");
-                }
-            } else puts("Allocate timer error");
+            printf("Thread slot is empty at No.%d\n", p);
+            THREADTIMER* timer = &timers[p];
+            timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
+            if(timer->accept_fd <= 0) {
+                puts("Accept client error");
+            } else {
+                #ifdef LISTEN_ON_IPV6
+                    uint16_t port = ntohs(client_addr.sin6_port);
+                    struct in6_addr in = client_addr.sin6_addr;
+                    char str[INET6_ADDRSTRLEN];	// 46
+                    inet_ntop(AF_INET6, &in, str, sizeof(str));
+                #else
+                    uint16_t port = ntohs(client_addr.sin_port);
+                    struct in_addr in = client_addr.sin_addr;
+                    char str[INET_ADDRSTRLEN];	// 16
+                    inet_ntop(AF_INET, &in, str, sizeof(str));
+                #endif
+                printf("Accept client %s:%u\n", str, port);
+                timer->index = p;
+                timer->touch = time(NULL);
+                timer->ptr = NULL;
+                reset_seq(p);
+                if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) puts("Error creating thread");
+                else puts("Creating thread succeeded");
+            }
         } else {
             puts("Max thread cnt exceeded");
             sleep(1);
@@ -605,6 +607,7 @@ static void accept_client() {
 
 static int close_and_send(THREADTIMER* timer, char *data, size_t numbytes) {
     close_dict(timer->lock_type, timer->index, &mu);
+    timer->lock_type = DICT_LOCK_UN;
     return send_data(timer->accept_fd, timer->index, data, numbytes);
 }
 
@@ -629,16 +632,15 @@ int main(int argc, char *argv[]) {
                             fp = NULL;
                             if(argv[as_daemon?5:4][0] == '-') { // use env
                                 fp = (FILE*)1;
-                                cfg = (CONFIG*)malloc(sizeof(CONFIG));
                                 puts("Read config from env");
                                 char* pwd = getenv("SDS_PWD");
                                 if(pwd) {
                                     char* sps = getenv("SDS_SPS");
                                     if(sps) {
-                                        strncpy(cfg->pwd, pwd, 64);
-                                        strncpy(cfg->sps, sps, 64);
-                                        cfg->pwd[63] = 0;
-                                        cfg->sps[63] = 0;
+                                        strncpy(cfg.pwd, pwd, 64);
+                                        strncpy(cfg.sps, sps, 64);
+                                        cfg.pwd[63] = 0;
+                                        cfg.sps[63] = 0;
                                         fp = (FILE*)-1;
                                     } else puts("Env SDS_SPS is null");
                                 } else puts("Env SDS_PWD is null");
@@ -647,8 +649,9 @@ int main(int argc, char *argv[]) {
                             if(fp && ((int)fp-1)) {
                                 if(~((int)fp)) {
                                     SIMPLE_PB* spb = get_pb(fp);
-                                    cfg = (CONFIG*)spb->target;
+                                    cfg = *(CONFIG*)spb->target;
                                     fclose(fp);
+                                    free(spb);
                                 }
                                 items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
                                 if(items_len) {
