@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define THREADCNT 16
-#define MAXWAITSEC 10
+#define MAXWAITSEC 4
 
 // DICTPOOLBIT must be lower than 4*8 = 32
 #define DICTPOOLBIT 16

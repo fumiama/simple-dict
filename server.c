@@ -241,9 +241,9 @@ static int s1_get(THREADTIMER *timer) {
 
 static int s2_set(THREADTIMER *timer) {
     uint8_t digest[16];
+    timer->lock_type = DICT_LOCK_EX;
     FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
     if(fp) {
-        timer->lock_type = DICT_LOCK_EX;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
@@ -350,10 +350,10 @@ static void del(FILE *fp, char* key, int len, char ret[4]) {
 static int s4_del(THREADTIMER *timer) {
     uint8_t digest[16];
     char ret[4];
+    timer->lock_type = DICT_LOCK_EX;
     FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
     //timer->status = 0;
     if(fp) {
-        timer->lock_type = DICT_LOCK_EX;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
@@ -367,6 +367,7 @@ static int s4_del(THREADTIMER *timer) {
         del(fp, timer->dat, timer->numbytes+1, ret);
         return close_and_send(timer, ret, 4);
     }
+    timer->lock_type = DICT_LOCK_UN;
     return close_and_send(timer, "null", 4);
 }
 
@@ -392,7 +393,9 @@ static void accept_timer(void *p) {
         sleep(MAXWAITSEC / 4);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
-        if(waitsec > MAXWAITSEC) break;
+        if(timer->lock_type == DICT_LOCK_EX) {
+            if(waitsec > MAXWAITSEC*THREADCNT) break;
+        } else if(waitsec > MAXWAITSEC) break;
     }
     pthread_t thread = accept_threads[index];
     if(thread) {

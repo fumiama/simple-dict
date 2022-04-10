@@ -27,8 +27,8 @@ static struct sockaddr_in their_addr;
 static pthread_t thread;
 static uint32_t file_size;
 static int recv_bin = 0;
-static char pwd[64] = "testpwd";
-static char sps[64] = "testsps";
+static char pwd[64] = "fumiama";
+static char sps[64] = "minamoto";
 
 void getMessage(void *p) {
     int c = 0, offset = 0;
