@@ -49,6 +49,7 @@ static DICT* setdict;
 static uint32_t* items_len;
 static CONFIG* cfg;
 static pthread_attr_t attr;
+static pthread_rwlock_t mu;
 
 #define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
 static DICT* dict_pool[DICTPOOLSZ+1];
@@ -139,10 +140,11 @@ static int send_data(int accept_fd, int index, char *data, size_t length) {
 
 static int send_all(THREADTIMER *timer) {
     int re = 1;
-    FILE *fp = open_dict(DICT_LOCK_SH, timer->index);
+    pthread_cleanup_push((void*)&pthread_rwlock_unlock, (void*)&mu);
+    FILE *fp = open_dict(DICT_LOCK_SH, timer->index, &mu);
     if(!fp) return 1;
     timer->lock_type = DICT_LOCK_SH;
-    off_t len = 0, file_size = get_dict_size();
+    off_t len = 0, file_size = get_dict_size(&mu);
     char* buf = (char*)malloc(file_size);
     if(buf) {
         if(fread(buf, file_size, 1, fp) == 1) {
@@ -163,7 +165,8 @@ static int send_all(THREADTIMER *timer) {
         }
         free(buf);
     }
-    close_dict(DICT_LOCK_SH, timer->index);
+    close_dict(DICT_LOCK_SH, timer->index, &mu);
+    pthread_cleanup_pop(0);
     return re;
 }
 
@@ -208,15 +211,15 @@ static void init_dict_pool(FILE *fp) {
 
 static int s1_get(THREADTIMER *timer) {
     uint8_t digest[16];
-    FILE *fp = open_dict(DICT_LOCK_SH, timer->index);
+    FILE *fp = open_dict(DICT_LOCK_SH, timer->index, &mu);
     //timer->status = 0;
-    if(fp) {
+    while(fp) {
         int ch;
         timer->lock_type = DICT_LOCK_SH;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
-        if(!dict_pool[p]) return close_and_send(timer, "null", 4);
+        if(!dict_pool[p]) break;
 
         int c = 16-4;
         int notok = 1;
@@ -235,6 +238,8 @@ static int s1_get(THREADTIMER *timer) {
                 return r;
             } else free(spb);
         }
+
+        break;
     }
     return close_and_send(timer, "null", 4);
 }
@@ -242,7 +247,7 @@ static int s1_get(THREADTIMER *timer) {
 static int s2_set(THREADTIMER *timer) {
     uint8_t digest[16];
     timer->lock_type = DICT_LOCK_EX;
-    FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
+    FILE *fp = open_dict(DICT_LOCK_EX, timer->index, &mu);
     if(fp) {
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
@@ -351,7 +356,7 @@ static int s4_del(THREADTIMER *timer) {
     uint8_t digest[16];
     char ret[4];
     timer->lock_type = DICT_LOCK_EX;
-    FILE *fp = open_dict(DICT_LOCK_EX, timer->index);
+    FILE *fp = open_dict(DICT_LOCK_EX, timer->index, &mu);
     //timer->status = 0;
     if(fp) {
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
@@ -373,7 +378,7 @@ static int s4_del(THREADTIMER *timer) {
 
 static int s5_md5(THREADTIMER *timer) {
     //timer->status = 0;
-    fill_md5();
+    fill_md5(&mu);
     if(is_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, "null", 4);
     else return send_data(timer->accept_fd, timer->index, "nequ", 4);
 }
@@ -400,7 +405,6 @@ static void accept_timer(void *p) {
     pthread_t thread = accept_threads[index];
     if(thread) {
         pthread_kill(thread, SIGQUIT);
-        accept_threads[index] = 0;
         puts("Kill thread");
     }
 }
@@ -418,9 +422,9 @@ static void kill_thread(THREADTIMER* timer) {
         timer->ptr = NULL;
         puts("Free data");
     }
-    if(timer->lock_type) close_dict(timer->lock_type, timer->index);
+    if(timer->lock_type) close_dict(timer->lock_type, timer->index, &mu);
     free(timer);
-    puts("Finish killing\n");
+    puts("Finish killing");
 }
 
 static void handle_pipe(int signo) {
@@ -433,9 +437,7 @@ static void handle_accept(void *p) {
     if(accept_fd > 0) {
         puts("\nConnected to the client");
         pthread_t thread;
-        pthread_key_t key;
-        pthread_key_create(&key, (void *)&kill_thread);
-        pthread_setspecific(key, p);
+        pthread_cleanup_push((void*)&kill_thread, p);
         if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
         //send_data(accept_fd, "Welcome to simple dict server.", 31);
@@ -541,6 +543,7 @@ static void handle_accept(void *p) {
             }
             CONV_END: puts("Conversation end");
         } else puts("Error allocating buffer");
+        pthread_cleanup_pop(1);
         puts("Thread exited normally");
     } else puts("Error accepting client");
 }
@@ -601,7 +604,7 @@ static void accept_client() {
 }
 
 static int close_and_send(THREADTIMER* timer, char *data, size_t numbytes) {
-    close_dict(timer->lock_type, timer->index);
+    close_dict(timer->lock_type, timer->index, &mu);
     return send_data(timer->accept_fd, timer->index, data, numbytes);
 }
 
@@ -622,7 +625,7 @@ int main(int argc, char *argv[]) {
                     if(!fp) fp = fopen(argv[as_daemon?4:3], "wb+");
                     if(fp) {
                         fclose(fp);
-                        if(init_dict(argv[as_daemon?4:3])) {
+                        if(init_dict(argv[as_daemon?4:3], &mu)) {
                             fp = NULL;
                             if(argv[as_daemon?5:4][0] == '-') { // use env
                                 fp = (FILE*)1;

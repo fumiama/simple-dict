@@ -7,7 +7,6 @@
 #include "dict.h"
 #include "server.h"
 
-static pthread_rwlock_t mu;
 static char* filepath;
 static uint8_t dict_md5[16];
 
@@ -21,8 +20,8 @@ static FILE* thread_fp[THREADCNT];
     #define _dict_md5_4 ((uint32_t*)&dict_md5)
 #endif
 
-int fill_md5() {
-    size_t size = get_dict_size();
+int fill_md5(pthread_rwlock_t* mu) {
+    size_t size = get_dict_size(mu);
     if(!size) {
         memset(dict_md5, 0, 16);
         puts("Dict is empty, use all zero md5");
@@ -30,15 +29,15 @@ int fill_md5() {
     }
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
-        pthread_rwlock_rdlock(&mu);
+        pthread_rwlock_rdlock(mu);
         rewind(fp_read);
         if(fread(dict_buff, size, 1, fp_read) == 1) {
-            pthread_rwlock_unlock(&mu);
+            pthread_rwlock_unlock(mu);
             md5(dict_buff, size, dict_md5);
             free(dict_buff);
             return 1;
         } else {
-            pthread_rwlock_unlock(&mu);
+            pthread_rwlock_unlock(mu);
             free(dict_buff);
             puts("Read dict error");
             return 0;
@@ -49,26 +48,25 @@ int fill_md5() {
     }
 }
 
-int init_dict(char* file_path) {
+int init_dict(char* file_path, pthread_rwlock_t* mu) {
     fp = fopen(file_path, "rb+");
     fp_read = fopen(file_path, "rb");
     if(fp) {
-        int err = pthread_rwlock_init(&mu, NULL);
+        int err = pthread_rwlock_init(mu, NULL);
         if(err) {
             puts("Init lock error");
             return 0;
         }
         filepath = file_path;
-        return fill_md5();
-    } else {
-        puts("Open dict error");
-        return 0;
+        return fill_md5(mu);
     }
+    puts("Open dict error");
+    return 0;
 }
 
-FILE* open_dict(uint8_t lock_type, uint32_t index) {
+FILE* open_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {
     if(lock_type & DICT_LOCK_EX) {
-        pthread_rwlock_wrlock(&mu);
+        pthread_rwlock_wrlock(mu);
         if(!fp) fp = fopen(filepath, "rb+");
         else rewind(fp);
         return fp;
@@ -77,7 +75,7 @@ FILE* open_dict(uint8_t lock_type, uint32_t index) {
         puts("Open dict: Index out of bounds");
         return NULL;
     }
-    pthread_rwlock_rdlock(&mu);
+    pthread_rwlock_rdlock(mu);
     if(!thread_fp[index]) thread_fp[index] = fopen(filepath, "rb");
     else rewind(thread_fp[index]);
     return thread_fp[index];
@@ -92,20 +90,20 @@ FILE* get_dict_fp_rd() {
     return fp_read;
 }
 
-void close_dict(uint8_t lock_type, uint32_t index) {
+void close_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {
     if(lock_type & DICT_LOCK_EX) fflush(fp);
-    pthread_rwlock_unlock(&mu);
+    pthread_rwlock_unlock(mu);
     puts("Close dict");
 }
 
-off_t get_dict_size() {
+off_t get_dict_size(pthread_rwlock_t* mu) {
     struct stat statbuf;
-    pthread_rwlock_rdlock(&mu);
+    pthread_rwlock_rdlock(mu);
     if(stat(filepath, &statbuf)==0) {
-        pthread_rwlock_unlock(&mu);
+        pthread_rwlock_unlock(mu);
         return statbuf.st_size;
     }
-    pthread_rwlock_unlock(&mu);
+    pthread_rwlock_unlock(mu);
     return -1;
 }
 
