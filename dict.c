@@ -25,29 +25,29 @@ int fill_md5(pthread_rwlock_t* mu) {
     if(!size) {
         memset(dict_md5, 0, 16);
         puts("Dict is empty, use all zero md5");
-        return 1;
+        return 0;
     }
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
         if(pthread_rwlock_tryrdlock(mu)) {
-            puts("Readlock busy");
-            return 0;
+            perror("Readlock busy: ");
+            return 1;
         }
         rewind(fp_read);
         if(fread(dict_buff, size, 1, fp_read) == 1) {
             pthread_rwlock_unlock(mu);
             md5(dict_buff, size, dict_md5);
             free(dict_buff);
-            return 1;
+            return 0;
         } else {
             pthread_rwlock_unlock(mu);
             free(dict_buff);
-            puts("Read dict error");
-            return 0;
+            perror("Read dict error: ");
+            return 2;
         }
     } else {
-        puts("Allocate memory error");
-        return 0; 
+        perror("Allocate memory error: ");
+        return 3; 
     }
 }
 
@@ -57,14 +57,14 @@ int init_dict(char* file_path, pthread_rwlock_t* mu) {
     if(fp) {
         int err = pthread_rwlock_init(mu, NULL);
         if(err) {
-            puts("Init lock error");
-            return 0;
+            perror("Init lock error: ");
+            return 1;
         }
         filepath = file_path;
         return fill_md5(mu);
     }
-    puts("Open dict error");
-    return 0;
+    perror("Open dict error: ");
+    return 2;
 }
 
 FILE* open_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {

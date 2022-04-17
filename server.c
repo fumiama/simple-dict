@@ -55,20 +55,19 @@ static pthread_rwlock_t mu;
 #define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
 static DICT* dict_pool[DICTPOOLSZ+1];
 
-#define showUsage(program) printf("Usage: %s [-d] listen_port try_times dict_file config_file\n\t-d: As daemon\n", program)
-
 static void accept_client();
 static void accept_timer(void *p);
-static int bind_server(uint16_t port, int try_times);
+static uint16_t bind_server(uint16_t port);
 static int close_and_send(THREADTIMER* timer, enum SERVERACK cmd, char *data, size_t numbytes);
 static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]);
 static void handle_accept(void *accept_fd_p);
+static void handle_int(int signo);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
 static void init_dict_pool(FILE *fp);
 static void kill_thread(THREADTIMER* timer);
 static uint32_t last_nonnull(char* p, uint32_t max_size);
-static int listen_socket(int try_times);
+static int listen_socket();
 static int send_all(THREADTIMER *timer);
 static int send_data(int accept_fd, int index, enum SERVERACK cmd, char *data, size_t length);
 static int s1_get(THREADTIMER *timer);
@@ -77,9 +76,7 @@ static int s3_set_data(THREADTIMER *timer);
 static int s4_del(THREADTIMER *timer);
 static int s5_md5(THREADTIMER *timer);
 
-static int bind_server(uint16_t port, int try_times) {
-    int fail_count = 0;
-    int result = -1;
+static uint16_t bind_server(uint16_t port) {
     #ifdef LISTEN_ON_IPV6
         server_addr.sin6_family = AF_INET6;
         server_addr.sin6_port = htons(port);
@@ -92,27 +89,32 @@ static int bind_server(uint16_t port, int try_times) {
         bzero(&(server_addr.sin_zero), 8);
         fd = socket(AF_INET, SOCK_STREAM, 0);
     #endif
-    while(!~(result = bind(fd, (struct sockaddr *)&server_addr, struct_len)) && fail_count++ < try_times) sleep(1);
-    if(!~result && fail_count >= try_times) {
-        puts("Bind server failure!");
+    if(!~bind(fd, (struct sockaddr *)&server_addr, struct_len)) {
+        perror("Bind server failure: ");
         return 0;
-    } else{
-        puts("Bind server success!");
-        return 1;
     }
+    #ifdef LISTEN_ON_IPV6
+        port = ntohs(server_addr.sin6_port);
+        struct in6_addr in = server_addr.sin6_addr;
+        char str[INET6_ADDRSTRLEN];	// 46
+        inet_ntop(AF_INET6, &in, str, sizeof(str));
+    #else
+        port = ntohs(server_addr.sin_port);
+        struct in_addr in = server_addr.sin_addr;
+        char str[INET_ADDRSTRLEN];	// 16
+        inet_ntop(AF_INET, &in, str, sizeof(str));
+    #endif
+    printf("Bind server successfully on %s:%u\n", str, port);
+    return port;
 }
 
-static int listen_socket(int try_times) {
-    int fail_count = 0;
-    int result = -1;
-    while(!~(result = listen(fd, 10)) && fail_count++ < try_times) sleep(1);
-    if(!~result && fail_count >= try_times) {
-        puts("Listen failed!");
+static int listen_socket() {
+    if(!~listen(fd, THREADCNT)) {
+        perror("Listen failed: ");
         return 0;
-    } else{
-        puts("Listening...");
-        return 1;
     }
+    puts("Listening...");
+    return 1;
 }
 
 static uint32_t last_nonnull(char* p, uint32_t max_size) {
@@ -428,6 +430,11 @@ static void kill_thread(THREADTIMER* timer) {
     puts("Finish killing");
 }
 
+static void handle_int(int signo) {
+    puts("Keyboard interrupted");
+    exit(0);
+}
+
 static void handle_pipe(int signo) {
     fprintf(stderr, "Pipe error: %d\n", signo);
     pthread_exit(NULL);
@@ -549,22 +556,25 @@ static void handle_accept(void *p) {
     puts("Thread exited normally");
 }
 
-static pid_t pid;
 static void accept_client() {
-    pid = fork();
+    pid_t pid = fork();
     while (pid > 0) {      //主进程监控子进程状态，如果子进程异常终止则重启之
         wait(NULL);
         puts("Server subprocess exited. Restart...");
         pid = fork();
     }
+    while(pid < 0) {
+        perror("Error when forking a subprocess: ");
+        sleep(1);
+    }
+    signal(SIGINT,  handle_int);
     signal(SIGQUIT, handle_quit);
     signal(SIGPIPE, handle_pipe);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
     init_dict_pool(get_dict_fp_rd());
-    if(pid < 0) perror("Error when forking a subprocess: ");
-    else while(1) {
+    while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;
         while(p < THREADCNT && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
@@ -616,64 +626,77 @@ static int close_and_send(THREADTIMER* timer, enum SERVERACK cmd, char *data, si
 }
 
 #define argequ(i, arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
+#define showUsage(program) \
+    printf("Usage:\n%s [-d] listen_port dict_file [config_file | -]\n\t-d: As daemon\n\t- : Read config from env SDS_PWD & SDS_SPS\n", program)
 int main(int argc, char *argv[]) {
-    if(argc != 5 && argc != 6) showUsage(argv[0]);
-    else {
-        int port = 0;
-        int as_daemon = argequ(1, "-d");
-        sscanf(argv[as_daemon?2:1], "%d", &port);
-        if(port > 0 && port < 65536) {
-            int times = 0;
-            sscanf(argv[as_daemon?3:2], "%d", &times);
-            if(times > 0) {
-                if(!as_daemon || (as_daemon && (daemon(1, 1) >= 0))) {
-                    FILE *fp = NULL;
-                    fp = fopen(argv[as_daemon?4:3], "rb+");
-                    if(!fp) fp = fopen(argv[as_daemon?4:3], "wb+");
-                    if(fp) {
-                        fclose(fp);
-                        if(init_dict(argv[as_daemon?4:3], &mu)) {
-                            fp = NULL;
-                            if(argv[as_daemon?5:4][0] == '-') { // use env
-                                fp = (FILE*)1;
-                                puts("Read config from env");
-                                char* pwd = getenv("SDS_PWD");
-                                if(pwd) {
-                                    char* sps = getenv("SDS_SPS");
-                                    if(sps) {
-                                        strncpy(cfg.pwd, pwd, 64);
-                                        strncpy(cfg.sps, sps, 64);
-                                        cfg.pwd[63] = 0;
-                                        cfg.sps[63] = 0;
-                                        fp = (FILE*)-1;
-                                    } else puts("Env SDS_SPS is null");
-                                } else puts("Env SDS_PWD is null");
-                            }
-                            if(!fp) fp = fopen(argv[as_daemon?5:4], "rb");
-                            if(fp && ((int)fp-1)) {
-                                if(~((int)fp)) {
-                                    SIMPLE_PB* spb = get_pb(fp);
-                                    cfg = *(CONFIG*)spb->target;
-                                    fclose(fp);
-                                    free(spb);
-                                }
-                                items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
-                                if(items_len) {
-                                    if(bind_server(port, times)) if(listen_socket(times)) accept_client();
-                                } else fputs("Align struct error", stderr);
-                            } else {
-                                fprintf(stderr, "Error opening config file: %s : ", argv[as_daemon?5:4]);
-                                perror("");
-                            }
-                        }
-                    } else {
-                        fprintf(stderr, "Error opening dict file: %s : ", argv[as_daemon?4:3]);
-                        perror("");
-                    }
-                } else perror("Start daemon error: ");
-            } else fprintf(stderr, "Error times: %d\n", times);
-        } else fprintf(stderr, "Error port: %d\n", port);
+    if(argc != 4 && argc != 5) {
+        showUsage(argv[0]);
+        return 0;
     }
+    int port = 0;
+    int as_daemon = argequ(1, "-d");
+    sscanf(argv[as_daemon?2:1], "%d", &port);
+    if(port < 0 || port >= 65536) {
+        fprintf(stderr, "Error port: %d\n", port);
+        return 1;
+    }
+    if(as_daemon && daemon(1, 1)<0) {
+        perror("Start daemon error: ");
+        return 2;
+    }
+    FILE *fp = NULL;
+    fp = fopen(argv[as_daemon?3:2], "rb+");
+    if(!fp) fp = fopen(argv[as_daemon?3:2], "wb+");
+    if(!fp) {
+        fprintf(stderr, "Error opening dict file: %s : ", argv[as_daemon?3:2]);
+        perror("");
+        return 3;
+    }
+    fclose(fp);
+    if(init_dict(argv[as_daemon?3:2], &mu))
+        return 4;
+    fp = NULL;
+    if(argv[as_daemon?4:3][0] == '-') { // use env
+        fp = (FILE*)1;
+        puts("Read config from env");
+        char* pwd = getenv("SDS_PWD");
+        if(pwd) {
+            char* sps = getenv("SDS_SPS");
+            if(sps) {
+                strncpy(cfg.pwd, pwd, 64);
+                strncpy(cfg.sps, sps, 64);
+                cfg.pwd[63] = 0;
+                cfg.sps[63] = 0;
+                fp = (FILE*)-1;
+            } else {
+                fputs("Env SDS_SPS is null", stderr);
+                return 5;
+            }
+        } else {
+            fputs("Env SDS_PWD is null", stderr);
+            return 6;
+        }
+    }
+    if(!fp) fp = fopen(argv[as_daemon?4:3], "rb");
+    if(fp == NULL) {
+        fprintf(stderr, "Error opening config file: %s : ", argv[as_daemon?4:3]);
+        perror("");
+        return 7;
+    }
+    if(~((int)fp)) {
+        SIMPLE_PB* spb = get_pb(fp);
+        cfg = *(CONFIG*)spb->target;
+        fclose(fp);
+        free(spb);
+    }
+    items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
+    if(!items_len) {
+        fputs("Align struct error", stderr);
+        return 8;
+    }
+    if(!bind_server((uint16_t)port)) return 9;
+    if(!listen_socket()) return 10;
+    accept_client();
     close(fd);
-    exit(EXIT_FAILURE);
+    return 11;
 }
