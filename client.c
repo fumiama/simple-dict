@@ -107,12 +107,7 @@ void getMessage(void *p) {
                 #ifdef DEBUG
                     printf("[normal] Get %u bytes packet with data: %s\n", offset, cp->data);
                 #endif
-                switch(cp->cmd) {
-                    case CMDACK:
-                        printf("recv ack: %s\n", cp->data);
-                    break;
-                    default: break;
-                }
+                printf("[%d] recv ack: %s\n", (int)cp->cmd, cp->data);
             }
             if(offset > c) {
                 offset -= c;
