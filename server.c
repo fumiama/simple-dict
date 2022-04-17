@@ -65,7 +65,7 @@ static void handle_int(int signo);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
 static void init_dict_pool(FILE *fp);
-static void kill_thread(THREADTIMER* timer);
+static void cleanup_thread(THREADTIMER* timer);
 static uint32_t last_nonnull(char* p, uint32_t max_size);
 static int listen_socket();
 static int send_all(THREADTIMER *timer);
@@ -304,10 +304,9 @@ static int s3_set_data(THREADTIMER *timer) {
     if(!set_pb(get_dict_fp_wr(), items_len, sizeof(DICT), setdict)) {
         fprintf(stderr, "Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
         return close_and_send(timer, ACKERRO, "erro", 4);
-    } else {
-        printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
-        return close_and_send(timer, ACKSUCC, "succ", 4);
     }
+    printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
+    return close_and_send(timer, ACKSUCC, "succ", 4);
 }
 
 static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]) {
@@ -413,8 +412,8 @@ static void accept_timer(void *p) {
     }
 }
 
-static void kill_thread(THREADTIMER* timer) {
-    puts("Start killing");
+static void cleanup_thread(THREADTIMER* timer) {
+    puts("Start cleaning");
     accept_threads[timer->index] = 0;
     if(timer->accept_fd) {
         close(timer->accept_fd);
@@ -427,7 +426,7 @@ static void kill_thread(THREADTIMER* timer) {
         puts("Free data");
     }
     if(timer->lock_type) close_dict(timer->lock_type, timer->index, &mu);
-    puts("Finish killing");
+    puts("Finish cleaning");
 }
 
 static void handle_int(int signo) {
@@ -445,11 +444,11 @@ static void handle_accept(void *p) {
     pthread_t thread;
     if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
         perror("Error creating timer thread: ");
-        kill_thread(timer_pointer_of(p));
+        cleanup_thread(timer_pointer_of(p));
         return;
     }
     puts("Creating timer thread succeeded");
-    pthread_cleanup_push((void*)&kill_thread, p);
+    pthread_cleanup_push((void*)&cleanup_thread, p);
     int accept_fd = timer_pointer_of(p)->accept_fd;
     uint32_t index = timer_pointer_of(p)->index;
     char *buff = malloc(BUFSIZ*sizeof(char));
@@ -569,6 +568,7 @@ static void accept_client() {
     }
     signal(SIGINT,  handle_int);
     signal(SIGQUIT, handle_quit);
+    signal(SIGKILL, exit);
     signal(SIGPIPE, handle_pipe);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -612,7 +612,7 @@ static void accept_client() {
         reset_seq(p);
         if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) {
             perror("Error creating thread: ");
-            kill_thread(timer);
+            cleanup_thread(timer);
             continue;
         }
         puts("Creating thread succeeded");

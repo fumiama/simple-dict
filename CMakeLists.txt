@@ -17,7 +17,7 @@ link_directories("/usr/local/lib")
 add_compile_options(-std=gnu99)
 message(STATUS "optional:-std=gnu99")
 
-add_executable(simple-dict-server server.c dict.c crypto.c)
+add_executable(simple-dict-server server.c crypto.c)
 add_executable(simple-dict-client client.c crypto.c)
 add_executable(cfgwriter cfgwriter.c)
 #add_executable(migrate migrate.c)
