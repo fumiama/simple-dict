@@ -25,11 +25,9 @@
 #ifdef LISTEN_ON_IPV6
     static socklen_t struct_len = sizeof(struct sockaddr_in6);
     static struct sockaddr_in6 server_addr;
-    static struct sockaddr_in6 client_addr;
 #else
     static socklen_t struct_len = sizeof(struct sockaddr_in);
     static struct sockaddr_in server_addr;
-    static struct sockaddr_in client_addr;
 #endif
 
 struct THREADTIMER {
@@ -43,7 +41,7 @@ struct THREADTIMER {
 typedef struct THREADTIMER THREADTIMER;
 static THREADTIMER timers[THREADCNT];
 #define timer_pointer_of(x) ((THREADTIMER*)(x))
-#define touch_timer(x) timer_pointer_of(x)->touch = time(NULL)
+#define touch_timer(x) (timer_pointer_of(x)->touch = time(NULL))
 
 static int fd;      // server fd
 static pthread_t accept_threads[THREADCNT];
@@ -131,7 +129,7 @@ static int send_data(int accept_fd, int index, enum SERVERACK cmd, char *data, s
     cmdpacket_encrypt(p, index, cfg.pwd);
     int total = CMDPACKET_HEAD_LEN+p->datalen;
     if(!~send(accept_fd, buf, total, 0)) {
-        puts("Send data error");
+        perror("Send data error: ");
         return 0;
     } else {
         printf("Send %d bytes data: ", total);
@@ -302,7 +300,7 @@ static int s3_set_data(THREADTIMER *timer) {
     memcpy(setdict->data, timer->dat, datasize);
 
     if(!set_pb(get_dict_fp_wr(), items_len, sizeof(DICT), setdict)) {
-        printf("Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
+        fprintf(stderr, "Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
         return close_and_send(timer, ACKERRO, "erro", 4);
     } else {
         printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
@@ -431,122 +429,124 @@ static void kill_thread(THREADTIMER* timer) {
 }
 
 static void handle_pipe(int signo) {
-    printf("Pipe error: %d\n", signo);
+    fprintf(stderr, "Pipe error: %d\n", signo);
     pthread_exit(NULL);
 }
 
 static void handle_accept(void *p) {
+    puts("\nConnected to the client, handling accept...");
+    pthread_t thread;
+    if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
+        perror("Error creating timer thread: ");
+        kill_thread(timer_pointer_of(p));
+        return;
+    }
+    puts("Creating timer thread succeeded");
+    pthread_cleanup_push((void*)&kill_thread, p);
     int accept_fd = timer_pointer_of(p)->accept_fd;
-    if(accept_fd > 0) {
-        puts("\nConnected to the client");
-        pthread_t thread;
-        pthread_cleanup_push((void*)&kill_thread, p);
-        if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) puts("Error creating timer thread");
-        else puts("Creating timer thread succeeded");
-        uint32_t index = timer_pointer_of(p)->index;
-        char *buff = malloc(BUFSIZ*sizeof(char));
-        if(buff) {
-            timer_pointer_of(p)->ptr = buff;
-            CMDPACKET* cp = (CMDPACKET*)buff;
-            ssize_t numbytes = 0, offset = 0;
-            while(
-                    accept_threads[index]
-                    && (
-                        offset >= CMDPACKET_HEAD_LEN
-                        || (numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0
-                    )
-                ) {
-                touch_timer(p);
-                offset += numbytes;
-                #ifdef DEBUG
-                    printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
-                #endif
-                if(offset < CMDPACKET_HEAD_LEN) break;
-                if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
-                    numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
-                    if(numbytes <= 0) break;
-                    else {
-                        offset += numbytes;
-                        #ifdef DEBUG
-                            printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
-                        #endif
-                    }
+    uint32_t index = timer_pointer_of(p)->index;
+    char *buff = malloc(BUFSIZ*sizeof(char));
+    if(buff) {
+        timer_pointer_of(p)->ptr = buff;
+        CMDPACKET* cp = (CMDPACKET*)buff;
+        ssize_t numbytes = 0, offset = 0;
+        while(
+                accept_threads[index]
+                && (
+                    offset >= CMDPACKET_HEAD_LEN
+                    || (numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0
+                )
+            ) {
+            touch_timer(p);
+            offset += numbytes;
+            #ifdef DEBUG
+                printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+            #endif
+            if(offset < CMDPACKET_HEAD_LEN) break;
+            if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
+                numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
+                if(numbytes <= 0) break;
+                else {
+                    offset += numbytes;
+                    #ifdef DEBUG
+                        printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+                    #endif
                 }
-                numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
-                if(offset < numbytes) break;
-                #ifdef DEBUG
-                    printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
-                #endif
-                if(cp->cmd < 5) {
-                    if(cmdpacket_decrypt(cp, index, cfg.pwd)) {
-                        cp->data[cp->datalen] = 0;
-                        timer_pointer_of(p)->dat = (char*)cp->data;
-                        timer_pointer_of(p)->numbytes = cp->datalen;
-                        printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
-                        switch(cp->cmd) {
-                            case CMDGET:
-                                //timer_pointer_of(p)->status = 1;
-                                if(!s1_get(timer_pointer_of(p))) goto CONV_END;
-                            break;
-                            case CMDCAT:
-                                if(!send_all(timer_pointer_of(p))) goto CONV_END;
-                            break;
-                            case CMDMD5:
-                                //timer_pointer_of(p)->status = 5;
-                                if(!s5_md5(timer_pointer_of(p))) goto CONV_END;
-                            break;
-                            case CMDACK: break;
-                            case CMDEND:
-                            default: goto CONV_END; break;
-                        }
-                    } else {
-                        puts("Decrypt normal data failed");
+            }
+            numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
+            if(offset < numbytes) break;
+            #ifdef DEBUG
+                printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
+            #endif
+            if(cp->cmd < 5) {
+                if(cmdpacket_decrypt(cp, index, cfg.pwd)) {
+                    cp->data[cp->datalen] = 0;
+                    timer_pointer_of(p)->dat = (char*)cp->data;
+                    timer_pointer_of(p)->numbytes = cp->datalen;
+                    printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
+                    switch(cp->cmd) {
+                        case CMDGET:
+                            //timer_pointer_of(p)->status = 1;
+                            if(!s1_get(timer_pointer_of(p))) goto CONV_END;
                         break;
-                    }
-                } else if(cp->cmd < 8) {
-                    if(cmdpacket_decrypt(cp, index, cfg.sps)) {
-                        cp->data[cp->datalen] = 0;
-                        timer_pointer_of(p)->dat = (char*)cp->data;
-                        timer_pointer_of(p)->numbytes = cp->datalen;
-                        printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
-                        switch(cp->cmd) {
-                            case CMDSET:
-                                //timer_pointer_of(p)->status = 2;
-                                if(!s2_set(timer_pointer_of(p))) goto CONV_END;
-                            break;
-                            case CMDDEL:
-                                //timer_pointer_of(p)->status = 4;
-                                if(!s4_del(timer_pointer_of(p))) goto CONV_END;
-                            break;
-                            case CMDDAT:
-                                if(timer_pointer_of(p)->lock_type == DICT_LOCK_EX) {
-                                    if(!s3_set_data(timer_pointer_of(p))) goto CONV_END;
-                                }
-                            break;
-                            default: goto CONV_END; break;
-                        }
-                    } else {
-                        puts("Decrypt super data failed");
+                        case CMDCAT:
+                            if(!send_all(timer_pointer_of(p))) goto CONV_END;
                         break;
+                        case CMDMD5:
+                            //timer_pointer_of(p)->status = 5;
+                            if(!s5_md5(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDACK: break;
+                        case CMDEND:
+                        default: goto CONV_END; break;
                     }
                 } else {
-                    puts("Invalid command");
+                    puts("Decrypt normal data failed");
                     break;
                 }
-                if(offset > numbytes) {
-                    offset -= numbytes;
-                    memmove(buff, buff+numbytes, offset);
-                    numbytes = 0;
-                } else offset = 0;
-                #ifdef DEBUG
-                    printf("Offset after analyzing packet: %zd\n", offset);
-                #endif
+            } else if(cp->cmd < 8) {
+                if(cmdpacket_decrypt(cp, index, cfg.sps)) {
+                    cp->data[cp->datalen] = 0;
+                    timer_pointer_of(p)->dat = (char*)cp->data;
+                    timer_pointer_of(p)->numbytes = cp->datalen;
+                    printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
+                    switch(cp->cmd) {
+                        case CMDSET:
+                            //timer_pointer_of(p)->status = 2;
+                            if(!s2_set(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDDEL:
+                            //timer_pointer_of(p)->status = 4;
+                            if(!s4_del(timer_pointer_of(p))) goto CONV_END;
+                        break;
+                        case CMDDAT:
+                            if(timer_pointer_of(p)->lock_type == DICT_LOCK_EX) {
+                                if(!s3_set_data(timer_pointer_of(p))) goto CONV_END;
+                            }
+                        break;
+                        default: goto CONV_END; break;
+                    }
+                } else {
+                    puts("Decrypt super data failed");
+                    break;
+                }
+            } else {
+                puts("Invalid command");
+                break;
             }
-            CONV_END: puts("Conversation end");
-        } else puts("Error allocating buffer");
-        pthread_cleanup_pop(1);
-        puts("Thread exited normally");
-    } else puts("Error accepting client");
+            if(offset > numbytes) {
+                offset -= numbytes;
+                memmove(buff, buff+numbytes, offset);
+                numbytes = 0;
+            } else offset = 0;
+            #ifdef DEBUG
+                printf("Offset after analyzing packet: %zd\n", offset);
+            #endif
+        }
+        CONV_END: puts("Conversation end");
+    } else perror("Error allocating buffer: ");
+    pthread_cleanup_pop(1);
+    puts("Thread exited normally");
 }
 
 static pid_t pid;
@@ -563,41 +563,49 @@ static void accept_client() {
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
     init_dict_pool(get_dict_fp_rd());
-    if(pid < 0) puts("Error when forking a subprocess");
+    if(pid < 0) perror("Error when forking a subprocess: ");
     else while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;
         while(p < THREADCNT && accept_threads[p] && !pthread_kill(accept_threads[p], 0)) p++;
-        if(p < THREADCNT) {
-            printf("Thread slot is empty at No.%d\n", p);
-            THREADTIMER* timer = &timers[p];
-            timer->accept_fd = accept(fd, (struct sockaddr *)&client_addr, &struct_len);
-            if(timer->accept_fd <= 0) {
-                puts("Accept client error");
-            } else {
-                #ifdef LISTEN_ON_IPV6
-                    uint16_t port = ntohs(client_addr.sin6_port);
-                    struct in6_addr in = client_addr.sin6_addr;
-                    char str[INET6_ADDRSTRLEN];	// 46
-                    inet_ntop(AF_INET6, &in, str, sizeof(str));
-                #else
-                    uint16_t port = ntohs(client_addr.sin_port);
-                    struct in_addr in = client_addr.sin_addr;
-                    char str[INET_ADDRSTRLEN];	// 16
-                    inet_ntop(AF_INET, &in, str, sizeof(str));
-                #endif
-                printf("Accept client %s:%u\n", str, port);
-                timer->index = p;
-                timer->touch = time(NULL);
-                timer->ptr = NULL;
-                reset_seq(p);
-                if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) puts("Error creating thread");
-                else puts("Creating thread succeeded");
-            }
-        } else {
+        if(p >= THREADCNT) {
             puts("Max thread cnt exceeded");
             sleep(1);
+            continue;
         }
+        printf("Thread slot is empty at No.%d\n", p);
+        #ifdef LISTEN_ON_IPV6
+            struct sockaddr_in6 client_addr;
+        #else
+            struct sockaddr_in client_addr;
+        #endif
+        int accept_fd;
+        while((accept_fd=accept(fd, (struct sockaddr *)&client_addr, &struct_len))<=0)
+            perror("Accept client error: ");
+        #ifdef LISTEN_ON_IPV6
+            uint16_t port = ntohs(client_addr.sin6_port);
+            struct in6_addr in = client_addr.sin6_addr;
+            char str[INET6_ADDRSTRLEN];	// 46
+            inet_ntop(AF_INET6, &in, str, sizeof(str));
+        #else
+            uint16_t port = ntohs(client_addr.sin_port);
+            struct in_addr in = client_addr.sin_addr;
+            char str[INET_ADDRSTRLEN];	// 16
+            inet_ntop(AF_INET, &in, str, sizeof(str));
+        #endif
+        printf("Accept client %s:%u\n", str, port);
+        THREADTIMER* timer = &timers[p];
+        timer->accept_fd = accept_fd;
+        timer->index = p;
+        timer->touch = time(NULL);
+        timer->ptr = NULL;
+        reset_seq(p);
+        if (pthread_create(accept_threads + p, &attr, (void *)&handle_accept, timer)) {
+            perror("Error creating thread: ");
+            kill_thread(timer);
+            continue;
+        }
+        puts("Creating thread succeeded");
     }
 }
 
@@ -652,13 +660,19 @@ int main(int argc, char *argv[]) {
                                 items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
                                 if(items_len) {
                                     if(bind_server(port, times)) if(listen_socket(times)) accept_client();
-                                } else puts("Align struct error");
-                            } else printf("Error opening config file: %s\n", argv[as_daemon?5:4]);
+                                } else fputs("Align struct error", stderr);
+                            } else {
+                                fprintf(stderr, "Error opening config file: %s : ", argv[as_daemon?5:4]);
+                                perror("");
+                            }
                         }
-                    } else printf("Error opening dict file: %s\n", argv[as_daemon?4:3]);
-                } else puts("Start daemon error");
-            } else printf("Error times: %d\n", times);
-        } else printf("Error port: %d\n", port);
+                    } else {
+                        fprintf(stderr, "Error opening dict file: %s : ", argv[as_daemon?4:3]);
+                        perror("");
+                    }
+                } else perror("Start daemon error: ");
+            } else fprintf(stderr, "Error times: %d\n", times);
+        } else fprintf(stderr, "Error port: %d\n", port);
     }
     close(fd);
     exit(EXIT_FAILURE);
