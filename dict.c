@@ -105,7 +105,7 @@ void close_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {
     puts("Close dict");
 }
 
-off_t get_dict_size(pthread_rwlock_t* mu) {
+off_t get_dict_size() {
     struct stat statbuf;
     if(stat(filepath, &statbuf)==0) {
         return statbuf.st_size;

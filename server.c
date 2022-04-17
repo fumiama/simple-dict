@@ -62,8 +62,8 @@ static DICT* dict_pool[DICTPOOLSZ+1];
 static void accept_client();
 static void accept_timer(void *p);
 static int bind_server(uint16_t port, int try_times);
-static int close_and_send(THREADTIMER* timer, char *data, size_t numbytes);
-static void del(FILE *fp, char* key, int len, char ret[4]);
+static int close_and_send(THREADTIMER* timer, enum SERVERACK cmd, char *data, size_t numbytes);
+static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]);
 static void handle_accept(void *accept_fd_p);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
@@ -72,7 +72,7 @@ static void kill_thread(THREADTIMER* timer);
 static uint32_t last_nonnull(char* p, uint32_t max_size);
 static int listen_socket(int try_times);
 static int send_all(THREADTIMER *timer);
-static int send_data(int accept_fd, int index, char *data, size_t length);
+static int send_data(int accept_fd, int index, enum SERVERACK cmd, char *data, size_t length);
 static int s1_get(THREADTIMER *timer);
 static int s2_set(THREADTIMER *timer);
 static int s3_set_data(THREADTIMER *timer);
@@ -122,10 +122,10 @@ static uint32_t last_nonnull(char* p, uint32_t max_size) {
     return max_size;
 }
 
-static int send_data(int accept_fd, int index, char *data, size_t length) {
+static int send_data(int accept_fd, int index, enum SERVERACK cmd, char *data, size_t length) {
     char buf[CMDPACKET_LEN_MAX];
     CMDPACKET* p = (CMDPACKET*)buf;
-    p->cmd = CMDACK;
+    p->cmd = (uint8_t)cmd;
     p->datalen = length;
     memcpy(p->data, data, p->datalen);
     cmdpacket_encrypt(p, index, cfg.pwd);
@@ -147,7 +147,7 @@ static int send_all(THREADTIMER *timer) {
     if(!fp) return 1;
     pthread_cleanup_push((void*)&pthread_rwlock_unlock, (void*)&mu);
     timer->lock_type = DICT_LOCK_SH;
-    off_t len = 0, file_size = get_dict_size(&mu);
+    off_t len = 0, file_size = get_dict_size();
     char* buf = (char*)malloc(file_size);
     if(buf) {
         pthread_cleanup_push((void*)&free, (void*)&buf);
@@ -231,7 +231,7 @@ static int s1_get(THREADTIMER *timer) {
         int notok = 1;
         while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
         if(!notok) {
-            return close_and_send(timer, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
+            return close_and_send(timer, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
         }
 
         while(has_next(fp, ch)) {
@@ -241,7 +241,7 @@ static int s1_get(THREADTIMER *timer) {
             if(!strcmp(timer->dat, d->key)) {
                 int r;
                 pthread_cleanup_push((void*)free, (void*)spb);
-                r = close_and_send(timer, d->data, last_nonnull(d->data, DICTDATSZ));
+                r = close_and_send(timer, ACKSUCC, d->data, last_nonnull(d->data, DICTDATSZ));
                 pthread_cleanup_pop(1);
                 return r;
             } else free(spb);
@@ -249,7 +249,7 @@ static int s1_get(THREADTIMER *timer) {
 
         break;
     }
-    return close_and_send(timer, "null", 4);
+    return close_and_send(timer, ACKNULL, "null", 4);
 }
 
 static int s2_set(THREADTIMER *timer) {
@@ -272,8 +272,8 @@ static int s2_set(THREADTIMER *timer) {
             else if(notok) setdict = &d; // 全部冲突
             else { // 已有值
                 char ret[4];
-                del(fp, timer->dat, timer->numbytes+1, ret); // 先删去
-                if(*(uint32_t*)ret == *(uint32_t*)"erro") return close_and_send(timer, "erro", 4);
+                // 先删去
+                if(del(fp, timer->dat, timer->numbytes+1, ret) == ACKERRO) return close_and_send(timer, ACKERRO, "erro", 4);
                 setdict = dict_pool[p];
             }
         }
@@ -285,11 +285,11 @@ static int s2_set(THREADTIMER *timer) {
         memset(setdict, 0, sizeof(DICT));
         strncpy(setdict->key, timer->dat, DICTKEYSZ-1);
         fseek(fp, 0, SEEK_END);
-        return send_data(timer->accept_fd, timer->index, "data", 4);
+        return send_data(timer->accept_fd, timer->index, ACKDATA, "data", 4);
     } else {
         timer->lock_type = DICT_LOCK_UN;
         //timer->status = 0;
-        return send_data(timer->accept_fd, timer->index, "erro", 4);
+        return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     }
 }
 
@@ -303,14 +303,14 @@ static int s3_set_data(THREADTIMER *timer) {
 
     if(!set_pb(get_dict_fp_wr(), items_len, sizeof(DICT), setdict)) {
         printf("Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
-        return close_and_send(timer, "erro", 4);
+        return close_and_send(timer, ACKERRO, "erro", 4);
     } else {
         printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
-        return close_and_send(timer, "succ", 4);
+        return close_and_send(timer, ACKSUCC, "succ", 4);
     }
 }
 
-static void del(FILE *fp, char* key, int len, char ret[4]) {
+static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]) {
     int ch;
     while(has_next(fp, ch)) {
         if(!ch) continue; // skip null bytes
@@ -328,11 +328,11 @@ static void del(FILE *fp, char* key, int len, char ret[4]) {
             if(!ftruncate(fileno(fp), end - spb->real_len)) {
                 free(spb);
                 *(uint32_t*)ret = *(uint32_t*)"succ";
-            } else {
-                free(spb);
-                *(uint32_t*)ret = *(uint32_t*)"erro";
+                return ACKSUCC;
             }
-            return;
+            free(spb);
+            *(uint32_t*)ret = *(uint32_t*)"erro";
+            return ACKERRO;
         }
         uint32_t cap = end - next;
         #ifdef DEBUG
@@ -348,7 +348,7 @@ static void del(FILE *fp, char* key, int len, char ret[4]) {
                         free(data);
                         free(spb);
                         *(uint32_t*)ret = *(uint32_t*)"succ";
-                        return;
+                        return ACKSUCC;
                     }
                 }
             }
@@ -356,10 +356,10 @@ static void del(FILE *fp, char* key, int len, char ret[4]) {
         }
         free(spb);
         *(uint32_t*)ret = *(uint32_t*)"erro";
-        return;
+        return ACKERRO;
     }
     *(uint32_t*)ret = *(uint32_t*)"null";
-    return;
+    return ACKNULL;
 }
 
 static int s4_del(THREADTIMER *timer) {
@@ -375,21 +375,19 @@ static int s4_del(THREADTIMER *timer) {
         int c = 16-4;
         int notok = 1;
         while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
-        if(notok) return close_and_send(timer, "null", 4);
+        if(notok) return close_and_send(timer, ACKNULL, "null", 4);
         free(dict_pool[p]);
         dict_pool[p] = NULL;
-
-        del(fp, timer->dat, timer->numbytes+1, ret);
-        return close_and_send(timer, ret, 4);
+        return close_and_send(timer, del(fp, timer->dat, timer->numbytes+1, ret), ret, 4);
     }
-    return close_and_send(timer, "null", 4);
+    return close_and_send(timer, ACKNULL, "null", 4);
 }
 
 static int s5_md5(THREADTIMER *timer) {
     //timer->status = 0;
     fill_md5(&mu);
-    if(is_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, "null", 4);
-    else return send_data(timer->accept_fd, timer->index, "nequ", 4);
+    if(is_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+    else return send_data(timer->accept_fd, timer->index, ACKNEQU, "nequ", 4);
 }
 
 static void handle_quit(int signo) {
@@ -445,8 +443,6 @@ static void handle_accept(void *p) {
         pthread_cleanup_push((void*)&kill_thread, p);
         if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) puts("Error creating timer thread");
         else puts("Creating timer thread succeeded");
-        //send_data(accept_fd, "Welcome to simple dict server.", 31);
-        //timer_pointer_of(p)->status = -1;
         uint32_t index = timer_pointer_of(p)->index;
         char *buff = malloc(BUFSIZ*sizeof(char));
         if(buff) {
@@ -605,10 +601,10 @@ static void accept_client() {
     }
 }
 
-static int close_and_send(THREADTIMER* timer, char *data, size_t numbytes) {
+static int close_and_send(THREADTIMER* timer, enum SERVERACK cmd, char *data, size_t numbytes) {
     close_dict(timer->lock_type, timer->index, &mu);
     timer->lock_type = DICT_LOCK_UN;
-    return send_data(timer->accept_fd, timer->index, data, numbytes);
+    return send_data(timer->accept_fd, timer->index, cmd, data, numbytes);
 }
 
 #define argequ(i, arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))

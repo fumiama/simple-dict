@@ -23,7 +23,7 @@ int   init_dict(char* file_path, pthread_rwlock_t* mu);
 int   is_md5_equal(uint8_t* digest);
 FILE* get_dict_fp_rd();
 FILE* get_dict_fp_wr();
-off_t get_dict_size(pthread_rwlock_t* mu);
+off_t get_dict_size();
 FILE* open_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu);
 
 #endif
