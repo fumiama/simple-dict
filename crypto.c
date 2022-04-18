@@ -47,48 +47,47 @@ void reset_seq(int index) {
 
 char* raw_encrypt(const char* buf, off_t* len, int index, const char pwd[64]) {
     TEADAT tin = {*len, (uint8_t*)buf};
+    TEADAT tout;
     TEA tea[4];
 
     ((uint64_t*)tea)[0] = ((uint64_t*)pwd)[0];
     ((uint64_t*)tea)[1] = ((uint64_t*)pwd)[1];
     ((uint8_t*)tea)[15] = seqs[index]++;
-    TEADAT* tout = tea_encrypt_native_endian(tea, sumtable, &tin);
+    tea_encrypt_native_endian(tea, sumtable, &tin, &tout);
 
-    *len = tout->len;
+    *len = tout.len;
     char* encbuf = (char*)malloc(*len);
-    memcpy(encbuf, tout->data, *len);
-    free(tout->ptr);
-    free(tout);
+    memcpy(encbuf, tout.data, *len);
+    free(tout.ptr);
 
     return encbuf;
 }
 
 char* raw_decrypt(const char* buf, off_t* len, int index, const char pwd[64]) {
     TEADAT tin = {*len, (uint8_t*)buf};
+    TEADAT tout;
     TEA tea[4];
 
     ((uint64_t*)tea)[0] = ((uint64_t*)pwd)[0];
     ((uint64_t*)tea)[1] = ((uint64_t*)pwd)[1];
     ((uint8_t*)tea)[15] = seqs[index];
-    TEADAT* tout = tea_decrypt_native_endian(tea, sumtable, &tin);
-    if(!tout) return NULL;
-    else if(tout->len <= 0) {
-        free(tout->ptr);
-        free(tout);
+    if(!tea_decrypt_native_endian(tea, sumtable, &tin, &tout)) return NULL;
+    else if(tout.len <= 0) {
+        free(tout.ptr);
         return NULL;
     } else seqs[index]++;
 
-    *len = tout->len;
+    *len = tout.len;
     char* decbuf = (char*)malloc(*len);
-    memcpy(decbuf, tout->data, *len);
-    free(tout->ptr);
-    free(tout);
+    memcpy(decbuf, tout.data, *len);
+    free(tout.ptr);
 
     return decbuf;
 }
 
 void cmdpacket_encrypt(CMDPACKET* p, int index, const char pwd[64]) {
     TEADAT tin = {p->datalen, p->data};
+    TEADAT tout;
     TEA tea[4];
     #ifdef DEBUG
         printf("encrypt len: %d, data: ", p->datalen);
@@ -106,7 +105,7 @@ void cmdpacket_encrypt(CMDPACKET* p, int index, const char pwd[64]) {
         putchar('\n');
     #endif
 
-    TEADAT* tout = tea_encrypt_native_endian(tea, sumtable, &tin);
+    tea_encrypt_native_endian(tea, sumtable, &tin, &tout);
 
     md5(p->data, p->datalen, p->md5);
     #ifdef DEBUG
@@ -115,21 +114,21 @@ void cmdpacket_encrypt(CMDPACKET* p, int index, const char pwd[64]) {
         putchar('\n');
     #endif
 
-    p->datalen = tout->len;
-    memcpy(p->data, tout->data, p->datalen);
+    p->datalen = tout.len;
+    memcpy(p->data, tout.data, p->datalen);
     #ifdef DEBUG
         printf("encrypted data len: %d, data: ", p->datalen);
         for(int i = 0; i < p->datalen; i++) printf("%02x", p->data[i]);
         putchar('\n');
     #endif
-    free(tout->ptr);
-    free(tout);
+    free(tout.ptr);
 
     return;
 }
 
 int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
     TEADAT tin = {p->datalen, p->data};
+    TEADAT tout;
     TEA tea[4];
     #ifdef DEBUG
         printf("decrypt len: %d, data: ", p->datalen);
@@ -147,15 +146,13 @@ int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
         putchar('\n');
     #endif
 
-    TEADAT* tout = tea_decrypt_native_endian(tea, sumtable, &tin);
-    if(!tout) return 0;
-    if(tout->len <= 0) {
-        free(tout->ptr);
-        free(tout);
+    if(!tea_decrypt_native_endian(tea, sumtable, &tin, &tout)) return 0;
+    if(tout.len <= 0) {
+        free(tout.ptr);
         return 0;
     }
     uint8_t datamd5[16];
-    md5(tout->data, tout->len, datamd5);
+    md5(tout.data, tout.len, datamd5);
     #ifdef DEBUG
         printf("decrypt md5: ");
         for(int i = 0; i < 16; i++) printf("%02x", datamd5[i]);
@@ -166,13 +163,11 @@ int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
     #endif
     if(is_md5_equal((uint8_t*)datamd5, p->md5)) {
         seqs[index]++;
-        p->datalen = tout->len;
-        memcpy(p->data, tout->data, p->datalen);
-        free(tout->ptr);
-        free(tout);
+        p->datalen = tout.len;
+        memcpy(p->data, tout.data, p->datalen);
+        free(tout.ptr);
         return 1;
     }
-    free(tout->ptr);
-    free(tout);
+    free(tout.ptr);
     return 0;
 }
