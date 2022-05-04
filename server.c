@@ -50,7 +50,7 @@ static DICT* setdict;
 static uint32_t* items_len;
 static CONFIG cfg;
 static pthread_attr_t attr;
-static pthread_rwlock_t mu;
+static volatile pthread_rwlock_t mu;
 
 #define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
 static DICT* dict_pool[DICTPOOLSZ+1];
@@ -58,6 +58,7 @@ static DICT* dict_pool[DICTPOOLSZ+1];
 static void accept_client();
 static void accept_timer(void *p);
 static uint16_t bind_server(uint16_t port);
+static void cleanup_thread(THREADTIMER* timer);
 static int close_and_send(THREADTIMER* timer, enum SERVERACK cmd, char *data, size_t numbytes);
 static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]);
 static void handle_accept(void *accept_fd_p);
@@ -65,7 +66,7 @@ static void handle_int(int signo);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
 static void init_dict_pool(FILE *fp);
-static void cleanup_thread(THREADTIMER* timer);
+static void kill_timer(pthread_t thread);
 static uint32_t last_nonnull(char* p, uint32_t max_size);
 static int listen_socket();
 static int send_all(THREADTIMER *timer);
@@ -412,6 +413,11 @@ static void accept_timer(void *p) {
     }
 }
 
+static void kill_timer(pthread_t thread) {
+    pthread_kill(thread, SIGQUIT);
+    puts("Kill timer");
+}
+
 static void cleanup_thread(THREADTIMER* timer) {
     puts("Start cleaning");
     accept_threads[timer->index] = 0;
@@ -449,6 +455,7 @@ static void handle_accept(void *p) {
     }
     puts("Creating timer thread succeeded");
     pthread_cleanup_push((void*)&cleanup_thread, p);
+    pthread_cleanup_push((void*)&kill_timer, thread);
     int accept_fd = timer_pointer_of(p)->accept_fd;
     uint32_t index = timer_pointer_of(p)->index;
     char *buff = malloc(BUFSIZ*sizeof(char));
@@ -551,6 +558,7 @@ static void handle_accept(void *p) {
         }
         CONV_END: puts("Conversation end");
     } else perror("Error allocating buffer: ");
+    pthread_cleanup_pop(1);
     pthread_cleanup_pop(1);
     puts("Thread exited normally");
 }
