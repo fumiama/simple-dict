@@ -32,12 +32,11 @@
 
 struct thread_timer_t {
     uint32_t index;
-    uint32_t lock_type;
+    int accept_fd;
     char *dat, *ptr;
     time_t touch;
     ssize_t numbytes;
     pthread_t thread;
-    int accept_fd;
 };
 typedef struct thread_timer_t thread_timer_t;
 static thread_timer_t timers[THREADCNT];
@@ -50,7 +49,6 @@ static dict_t* setdict;
 static uint32_t* items_len;
 static CONFIG cfg;
 static pthread_attr_t attr;
-static pthread_rwlock_t mu;
 
 #define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
 static dict_t* dict_pool[DICTPOOLSZ+1];
@@ -59,7 +57,6 @@ static void accept_client();
 static void accept_timer(void *p);
 static uint16_t bind_server(uint16_t port);
 static void cleanup_thread(thread_timer_t* timer);
-static int close_and_send(thread_timer_t* timer, enum SERVERACK cmd, char *data, size_t numbytes);
 static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]);
 static void handle_accept(void *accept_fd_p);
 static void handle_int(int signo);
@@ -144,10 +141,9 @@ static int send_data(int accept_fd, int index, enum SERVERACK cmd, char *data, s
 
 static int send_all(thread_timer_t *timer) {
     int re = 1;
-    FILE *fp = open_dict(DICT_LOCK_SH, timer->index, &mu);
+    FILE *fp = open_shared_dict(timer->index);
     if(!fp) return 1;
-    pthread_cleanup_push((void*)&pthread_rwlock_unlock, (void*)&mu);
-    timer->lock_type = DICT_LOCK_SH;
+    pthread_cleanup_push((void*)&close_shared_dict, NULL);
     off_t len = 0, file_size = get_dict_size();
     char* buf = (char*)malloc(file_size);
     if(buf) {
@@ -171,9 +167,7 @@ static int send_all(thread_timer_t *timer) {
         }
         pthread_cleanup_pop(1);
     }
-    close_dict(DICT_LOCK_SH, timer->index, &mu);
-    timer->lock_type = DICT_LOCK_UN;
-    pthread_cleanup_pop(0);
+    pthread_cleanup_pop(1);
     return re;
 }
 
@@ -218,11 +212,10 @@ static void init_dict_pool(FILE *fp) {
 
 static int s1_get(thread_timer_t *timer) {
     uint8_t digest[16];
-    FILE *fp = open_dict(DICT_LOCK_SH, timer->index, &mu);
+    FILE *fp = open_shared_dict(timer->index);
     //timer->status = 0;
     while(fp) {
         int ch;
-        timer->lock_type = DICT_LOCK_SH;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
@@ -232,7 +225,8 @@ static int s1_get(thread_timer_t *timer) {
         int notok = 1;
         while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
         if(!notok) {
-            return close_and_send(timer, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
+            close_shared_dict();
+            return send_data(timer->accept_fd, timer->index, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
         }
 
         while(has_next(fp, ch)) {
@@ -242,7 +236,8 @@ static int s1_get(thread_timer_t *timer) {
             if(!strcmp(timer->dat, d->key)) {
                 int r;
                 pthread_cleanup_push((void*)free, (void*)spb);
-                r = close_and_send(timer, ACKSUCC, d->data, last_nonnull(d->data, DICTDATSZ));
+                close_shared_dict();
+                r = send_data(timer->accept_fd, timer->index, ACKSUCC, d->data, last_nonnull(d->data, DICTDATSZ));
                 pthread_cleanup_pop(1);
                 return r;
             } else free(spb);
@@ -250,16 +245,15 @@ static int s1_get(thread_timer_t *timer) {
 
         break;
     }
-    return close_and_send(timer, ACKNULL, "null", 4);
+    close_shared_dict();
+    return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
 }
 
 static int s2_set(thread_timer_t *timer) {
     uint8_t digest[16];
-    timer->lock_type = DICT_LOCKING_EX;
-    FILE *fp = open_dict(DICT_LOCK_EX, timer->index, &mu);
+    FILE *fp = open_ex_dict();
     if(fp) {
         touch_timer(timer);
-        timer->lock_type = DICT_LOCK_EX;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
@@ -274,7 +268,10 @@ static int s2_set(thread_timer_t *timer) {
             else { // 已有值
                 char ret[4];
                 // 先删去
-                if(del(fp, timer->dat, timer->numbytes+1, ret) == ACKERRO) return close_and_send(timer, ACKERRO, "erro", 4);
+                if(del(fp, timer->dat, timer->numbytes+1, ret) == ACKERRO) {
+                    close_ex_dict();
+                    return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+                }
                 setdict = dict_pool[p];
             }
         }
@@ -288,7 +285,7 @@ static int s2_set(thread_timer_t *timer) {
         fseek(fp, 0, SEEK_END);
         return send_data(timer->accept_fd, timer->index, ACKDATA, "data", 4);
     } else {
-        timer->lock_type = DICT_LOCK_UN;
+        close_ex_dict();
         //timer->status = 0;
         return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     }
@@ -304,10 +301,12 @@ static int s3_set_data(thread_timer_t *timer) {
 
     if(!set_pb(get_dict_fp_wr(), items_len, sizeof(dict_t), setdict)) {
         fprintf(stderr, "Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
-        return close_and_send(timer, ACKERRO, "erro", 4);
+        close_ex_dict();
+        return send_data(timer->accept_fd, timer->index,  ACKERRO, "erro", 4);
     }
     printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
-    return close_and_send(timer, ACKSUCC, "succ", 4);
+    close_ex_dict();
+    return send_data(timer->accept_fd, timer->index,  ACKSUCC, "succ", 4);
 }
 
 static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]) {
@@ -365,8 +364,7 @@ static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]) {
 static int s4_del(thread_timer_t *timer) {
     uint8_t digest[16];
     char ret[4];
-    timer->lock_type = DICT_LOCK_EX;
-    FILE *fp = open_dict(DICT_LOCK_EX, timer->index, &mu);
+    FILE *fp = open_ex_dict();
     //timer->status = 0;
     if(fp) {
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
@@ -375,12 +373,18 @@ static int s4_del(thread_timer_t *timer) {
         int c = 16-4;
         int notok = 1;
         while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
-        if(notok) return close_and_send(timer, ACKNULL, "null", 4);
+        if(notok) {
+            close_ex_dict();
+            return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+        }
         free(dict_pool[p]);
         dict_pool[p] = NULL;
-        return close_and_send(timer, del(fp, timer->dat, timer->numbytes+1, ret), ret, 4);
+        int r = send_data(timer->accept_fd, timer->index, del(fp, timer->dat, timer->numbytes+1, ret), ret, 4);
+        close_ex_dict();
+        return r;
     }
-    return close_and_send(timer, ACKNULL, "null", 4);
+    close_ex_dict();
+    return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
 }
 
 static int s5_md5(thread_timer_t *timer) {
@@ -403,9 +407,7 @@ static void accept_timer(void *p) {
         sleep(MAXWAITSEC / 4);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
-        if(timer->lock_type >= DICT_LOCK_EX) {
-            if(waitsec > MAXWAITSEC*THREADCNT) break;
-        } else if(waitsec > MAXWAITSEC) break;
+        if(waitsec > MAXWAITSEC+2) break;
     }
     
     if(thread) {
@@ -432,7 +434,6 @@ static void cleanup_thread(thread_timer_t* timer) {
         timer->ptr = NULL;
         puts("Free data");
     }
-    if(timer->lock_type) close_dict(timer->lock_type, timer->index, &mu);
     puts("Finish cleaning");
 }
 
@@ -498,14 +499,14 @@ static void handle_accept(void *p) {
                     switch(cp->cmd) {
                         case CMDGET:
                             //timer_pointer_of(p)->status = 1;
-                            if(!s1_get(timer_pointer_of(p))) goto CONV_END;
+                            if(!is_ex_dict_open && !s1_get(timer_pointer_of(p))) goto CONV_END;
                         break;
                         case CMDCAT:
-                            if(!send_all(timer_pointer_of(p))) goto CONV_END;
+                            if(!is_ex_dict_open && !send_all(timer_pointer_of(p))) goto CONV_END;
                         break;
                         case CMDMD5:
                             //timer_pointer_of(p)->status = 5;
-                            if(!s5_md5(timer_pointer_of(p))) goto CONV_END;
+                            if(!is_ex_dict_open && !s5_md5(timer_pointer_of(p))) goto CONV_END;
                         break;
                         case CMDACK: break;
                         case CMDEND:
@@ -524,16 +525,14 @@ static void handle_accept(void *p) {
                     switch(cp->cmd) {
                         case CMDSET:
                             //timer_pointer_of(p)->status = 2;
-                            if(!s2_set(timer_pointer_of(p))) goto CONV_END;
+                            if(!is_ex_dict_open && !s2_set(timer_pointer_of(p))) goto CONV_END;
                         break;
                         case CMDDEL:
                             //timer_pointer_of(p)->status = 4;
-                            if(!s4_del(timer_pointer_of(p))) goto CONV_END;
+                            if(!is_ex_dict_open && !s4_del(timer_pointer_of(p))) goto CONV_END;
                         break;
                         case CMDDAT:
-                            if(timer_pointer_of(p)->lock_type == DICT_LOCK_EX) {
-                                if(!s3_set_data(timer_pointer_of(p))) goto CONV_END;
-                            }
+                            if(is_ex_dict_open && !s3_set_data(timer_pointer_of(p))) goto CONV_END;
                         break;
                         default: goto CONV_END; break;
                     }
@@ -623,12 +622,6 @@ static void accept_client() {
         }
         puts("Creating thread succeeded");
     }
-}
-
-static int close_and_send(thread_timer_t* timer, enum SERVERACK cmd, char *data, size_t numbytes) {
-    close_dict(timer->lock_type, timer->index, &mu);
-    timer->lock_type = DICT_LOCK_UN;
-    return send_data(timer->accept_fd, timer->index, cmd, data, numbytes);
 }
 
 #define argequ(i, arg) (*(uint16_t*)argv[i] == *(uint16_t*)(arg))
