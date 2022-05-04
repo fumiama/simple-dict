@@ -50,7 +50,7 @@ static DICT* setdict;
 static uint32_t* items_len;
 static CONFIG cfg;
 static pthread_attr_t attr;
-static volatile pthread_rwlock_t mu;
+static pthread_rwlock_t mu;
 
 #define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
 static DICT* dict_pool[DICTPOOLSZ+1];
