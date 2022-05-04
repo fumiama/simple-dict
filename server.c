@@ -385,7 +385,7 @@ static int s4_del(THREADTIMER *timer) {
 static int s5_md5(THREADTIMER *timer) {
     //timer->status = 0;
     fill_md5(&mu);
-    if(is_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+    if(is_dict_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
     else return send_data(timer->accept_fd, timer->index, ACKNEQU, "nequ", 4);
 }
 

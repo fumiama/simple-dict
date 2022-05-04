@@ -131,7 +131,7 @@ static void close_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) 
     puts("Close dict");
 }
 
-static inline int is_md5_equal(uint8_t* digest) {
+static inline int is_dict_md5_equal(uint8_t* digest) {
     #ifdef CPUBIT64
         uint64_t* digest2 = (uint64_t*)digest;
         return (digest2[0] == _dict_md5_2[0]) &&
