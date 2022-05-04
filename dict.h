@@ -95,7 +95,7 @@ static int init_dict(char* file_path, pthread_rwlock_t* mu) {
 
 static FILE* open_dict(uint8_t lock_type, uint32_t index, pthread_rwlock_t* mu) {
     if(lock_type & DICT_LOCK_EX) {
-        if(pthread_rwlock_trywrlock(mu)) {
+        if(pthread_rwlock_wrlock(mu)) {
             puts("Open dict: Writelock busy");
             return NULL;
         }

@@ -435,7 +435,7 @@ static void handle_int(int signo) {
 }
 
 static void handle_pipe(int signo) {
-    fprintf(stderr, "Pipe error: %d\n", signo);
+    puts("Pipe error, exit thread...");
     pthread_exit(NULL);
 }
 
