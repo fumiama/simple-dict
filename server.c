@@ -407,7 +407,7 @@ static void accept_timer(void *p) {
         sleep(MAXWAITSEC / 4);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
-        if(waitsec > MAXWAITSEC+2) break;
+        if(waitsec > MAXWAITSEC+is_ex_dict_open?MAXWAITSEC:0) break;
     }
     
     if(thread) {
