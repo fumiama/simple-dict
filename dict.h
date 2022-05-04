@@ -13,12 +13,12 @@
 
 #define DICTKEYSZ 127
 #define DICTDATSZ 127
-struct DICT {
+struct dict_t {
     char key[DICTKEYSZ];
     char data[DICTDATSZ];
 };
-typedef struct DICT DICT;
-#define DICTSZ sizeof(DICT)
+typedef struct dict_t dict_t;
+#define DICTSZ sizeof(dict_t)
 
 #define DICT_LOCK_UN 0x00
 #define DICT_LOCK_SH 0x01
