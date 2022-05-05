@@ -434,6 +434,7 @@ static void cleanup_thread(thread_timer_t* timer) {
         timer->ptr = NULL;
         puts("Free data");
     }
+    if(is_ex_dict_open) close_ex_dict();
     puts("Finish cleaning");
 }
 
