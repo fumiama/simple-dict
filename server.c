@@ -294,6 +294,7 @@ static int s2_set(thread_timer_t *timer) {
         break;
     }
     pthread_cleanup_pop(0);
+    return r;
 }
 
 static int s3_set_data(thread_timer_t *timer) {
@@ -475,7 +476,7 @@ static void handle_accept(void *p) {
     pthread_cleanup_push((void*)&kill_timer, thread);
     int accept_fd = timer_pointer_of(p)->accept_fd;
     uint32_t index = timer_pointer_of(p)->index;
-    char *buff = timer_pointer_of(p)->buf;
+    uint8_t *buff = timer_pointer_of(p)->buf;
     CMDPACKET* cp = (CMDPACKET*)buff;
     ssize_t numbytes = 0, offset = 0;
     while(
