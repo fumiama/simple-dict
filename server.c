@@ -33,10 +33,11 @@
 struct thread_timer_t {
     uint32_t index;
     int accept_fd;
-    char *dat, *ptr;
     time_t touch;
     ssize_t numbytes;
+    char *dat;
     pthread_t thread;
+    uint8_t buf[BUFSIZ];
 };
 typedef struct thread_timer_t thread_timer_t;
 static thread_timer_t timers[THREADCNT];
@@ -142,7 +143,7 @@ static int send_data(int accept_fd, int index, enum SERVERACK cmd, char *data, s
 static int send_all(thread_timer_t *timer) {
     int re = 1;
     FILE *fp = open_shared_dict(timer->index);
-    if(!fp) return 1;
+    if(fp == NULL) return 1;
     pthread_cleanup_push((void*)&close_shared_dict, NULL);
     off_t len = 0, file_size = get_dict_size();
     char* buf = (char*)malloc(file_size);
@@ -213,8 +214,11 @@ static void init_dict_pool(FILE *fp) {
 static int s1_get(thread_timer_t *timer) {
     uint8_t digest[16];
     FILE *fp = open_shared_dict(timer->index);
+    if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    int ret = -1;
     //timer->status = 0;
-    while(fp) {
+    pthread_cleanup_push((void*)&close_shared_dict, NULL);
+    while(1) {
         int ch;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
@@ -225,8 +229,8 @@ static int s1_get(thread_timer_t *timer) {
         int notok = 1;
         while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
         if(!notok) {
-            close_shared_dict();
-            return send_data(timer->accept_fd, timer->index, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
+            ret = send_data(timer->accept_fd, timer->index, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
+            break;
         }
 
         while(has_next(fp, ch)) {
@@ -234,25 +238,27 @@ static int s1_get(thread_timer_t *timer) {
             SIMPLE_PB* spb = get_pb(fp);
             dict_t* d = (dict_t*)spb->target;
             if(!strcmp(timer->dat, d->key)) {
-                int r;
                 pthread_cleanup_push((void*)free, (void*)spb);
-                close_shared_dict();
-                r = send_data(timer->accept_fd, timer->index, ACKSUCC, d->data, last_nonnull(d->data, DICTDATSZ));
+                ret = send_data(timer->accept_fd, timer->index, ACKSUCC, d->data, last_nonnull(d->data, DICTDATSZ));
                 pthread_cleanup_pop(1);
-                return r;
+                break;
             } else free(spb);
         }
 
         break;
     }
-    close_shared_dict();
-    return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+    pthread_cleanup_pop(1);
+    if(!~ret) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+    return ret;
 }
 
 static int s2_set(thread_timer_t *timer) {
     uint8_t digest[16];
     FILE *fp = open_ex_dict();
-    if(fp) {
+    int r;
+    if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    pthread_cleanup_push((void*)&close_ex_dict, NULL);
+    while(1) {
         touch_timer(timer);
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
@@ -270,7 +276,8 @@ static int s2_set(thread_timer_t *timer) {
                 // 先删去
                 if(del(fp, timer->dat, timer->numbytes+1, ret) == ACKERRO) {
                     close_ex_dict();
-                    return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+                    r = send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+                    break;
                 }
                 setdict = dict_pool[p];
             }
@@ -283,30 +290,31 @@ static int s2_set(thread_timer_t *timer) {
         memset(setdict, 0, sizeof(dict_t));
         strncpy(setdict->key, timer->dat, DICTKEYSZ-1);
         fseek(fp, 0, SEEK_END);
-        return send_data(timer->accept_fd, timer->index, ACKDATA, "data", 4);
-    } else {
-        close_ex_dict();
-        //timer->status = 0;
-        return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+        r = send_data(timer->accept_fd, timer->index, ACKDATA, "data", 4);
+        break;
     }
+    pthread_cleanup_pop(0);
 }
 
 static int s3_set_data(thread_timer_t *timer) {
     //timer->status = 0;
     uint32_t datasize = (timer->numbytes > (DICTDATSZ-1))?(DICTDATSZ-1):timer->numbytes;
+    int ret;
     #ifdef DEBUG
         printf("Set data size: %u\n", datasize);
     #endif
-    memcpy(setdict->data, timer->dat, datasize);
 
+    pthread_cleanup_push((void*)&close_ex_dict, NULL);
+    memcpy(setdict->data, timer->dat, datasize);
     if(!set_pb(get_dict_fp_wr(), items_len, sizeof(dict_t), setdict)) {
         fprintf(stderr, "Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
-        close_ex_dict();
-        return send_data(timer->accept_fd, timer->index,  ACKERRO, "erro", 4);
+        ret = send_data(timer->accept_fd, timer->index,  ACKERRO, "erro", 4);
+    } else {
+        printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
+        ret = send_data(timer->accept_fd, timer->index,  ACKSUCC, "succ", 4);
     }
-    printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
-    close_ex_dict();
-    return send_data(timer->accept_fd, timer->index,  ACKSUCC, "succ", 4);
+    pthread_cleanup_pop(1);
+    return ret;
 }
 
 static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]) {
@@ -364,9 +372,12 @@ static enum SERVERACK del(FILE *fp, char* key, int len, char ret[4]) {
 static int s4_del(thread_timer_t *timer) {
     uint8_t digest[16];
     char ret[4];
+    int r;
     FILE *fp = open_ex_dict();
-    //timer->status = 0;
-    if(fp) {
+    if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+
+    pthread_cleanup_push((void*)&close_ex_dict, NULL);
+    while(1) {
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
@@ -374,17 +385,16 @@ static int s4_del(thread_timer_t *timer) {
         int notok = 1;
         while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
         if(notok) {
-            close_ex_dict();
-            return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+            r = send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+            break;
         }
         free(dict_pool[p]);
         dict_pool[p] = NULL;
-        int r = send_data(timer->accept_fd, timer->index, del(fp, timer->dat, timer->numbytes+1, ret), ret, 4);
-        close_ex_dict();
-        return r;
+        r = send_data(timer->accept_fd, timer->index, del(fp, timer->dat, timer->numbytes+1, ret), ret, 4);
+        break;
     }
-    close_ex_dict();
-    return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+    pthread_cleanup_pop(1);
+    return r;
 }
 
 static int s5_md5(thread_timer_t *timer) {
@@ -395,7 +405,7 @@ static int s5_md5(thread_timer_t *timer) {
 }
 
 static void handle_quit(int signo) {
-    printf("Handle quit with sig %d\n", signo);
+    puts("Handle sigquit");
     pthread_exit(NULL);
 }
 
@@ -403,16 +413,21 @@ static void accept_timer(void *p) {
     thread_timer_t *timer = timer_pointer_of(p);
     uint32_t index = timer->index;
     pthread_t thread = timer->thread;
+    sigset_t mask;
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGPIPE); // 防止处理嵌套
+    pthread_sigmask(SIG_BLOCK, &mask, NULL);
+
     while(!pthread_kill(thread, 0)) {
         sleep(MAXWAITSEC / 4);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
-        if(waitsec > MAXWAITSEC+is_ex_dict_open?MAXWAITSEC:0) break;
-    }
-    
-    if(thread) {
-        pthread_kill(thread, SIGQUIT);
-        puts("Kill thread");
+        if(waitsec > MAXWAITSEC+is_ex_dict_open?MAXWAITSEC:0) {
+            pthread_kill(thread, SIGQUIT);
+            puts("Kill thread");
+            break;
+        }
     }
 }
 
@@ -422,6 +437,10 @@ static void kill_timer(pthread_t thread) {
 }
 
 static void cleanup_thread(thread_timer_t* timer) {
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGPIPE); // 防止处理嵌套
+    pthread_sigmask(SIG_BLOCK, &mask, NULL);
     puts("Start cleaning");
     timer->thread = 0;
     if(timer->accept_fd) {
@@ -429,12 +448,7 @@ static void cleanup_thread(thread_timer_t* timer) {
         timer->accept_fd = 0;
         puts("Close accept");
     }
-    if(timer->ptr) {
-        free(timer->ptr);
-        timer->ptr = NULL;
-        puts("Free data");
-    }
-    if(is_ex_dict_open) close_ex_dict();
+    close_ex_dict();
     puts("Finish cleaning");
 }
 
@@ -461,101 +475,98 @@ static void handle_accept(void *p) {
     pthread_cleanup_push((void*)&kill_timer, thread);
     int accept_fd = timer_pointer_of(p)->accept_fd;
     uint32_t index = timer_pointer_of(p)->index;
-    char *buff = malloc(BUFSIZ*sizeof(char));
-    if(buff) {
-        timer_pointer_of(p)->ptr = buff;
-        CMDPACKET* cp = (CMDPACKET*)buff;
-        ssize_t numbytes = 0, offset = 0;
-        while(
-                offset >= CMDPACKET_HEAD_LEN
-                || (numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0
-            ) {
-            touch_timer(p);
-            offset += numbytes;
-            #ifdef DEBUG
-                printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
-            #endif
-            if(offset < CMDPACKET_HEAD_LEN) break;
-            if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
-                numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
-                if(numbytes <= 0) break;
-                else {
-                    offset += numbytes;
-                    #ifdef DEBUG
-                        printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
-                    #endif
-                }
+    char *buff = timer_pointer_of(p)->buf;
+    CMDPACKET* cp = (CMDPACKET*)buff;
+    ssize_t numbytes = 0, offset = 0;
+    while(
+            offset >= CMDPACKET_HEAD_LEN
+            || (numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0
+        ) {
+        touch_timer(p);
+        offset += numbytes;
+        #ifdef DEBUG
+            printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+        #endif
+        if(offset < CMDPACKET_HEAD_LEN) break;
+        if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
+            numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
+            if(numbytes <= 0) break;
+            else {
+                offset += numbytes;
+                #ifdef DEBUG
+                    printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
+                #endif
             }
-            numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
-            if(offset < numbytes) break;
-            #ifdef DEBUG
-                printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
-            #endif
-            if(cp->cmd < 5) {
-                if(cmdpacket_decrypt(cp, index, cfg.pwd)) {
-                    cp->data[cp->datalen] = 0;
-                    timer_pointer_of(p)->dat = (char*)cp->data;
-                    timer_pointer_of(p)->numbytes = cp->datalen;
-                    printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
-                    switch(cp->cmd) {
-                        case CMDGET:
-                            //timer_pointer_of(p)->status = 1;
-                            if(!is_ex_dict_open && !s1_get(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDCAT:
-                            if(!is_ex_dict_open && !send_all(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDMD5:
-                            //timer_pointer_of(p)->status = 5;
-                            if(!is_ex_dict_open && !s5_md5(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDACK: break;
-                        case CMDEND:
-                        default: goto CONV_END; break;
-                    }
-                } else {
-                    puts("Decrypt normal data failed");
+        }
+        numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
+        if(offset < numbytes) break;
+        #ifdef DEBUG
+            printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
+        #endif
+        if(cp->cmd < 5) {
+            if(cmdpacket_decrypt(cp, index, cfg.pwd)) {
+                cp->data[cp->datalen] = 0;
+                timer_pointer_of(p)->dat = (char*)cp->data;
+                timer_pointer_of(p)->numbytes = cp->datalen;
+                printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
+                switch(cp->cmd) {
+                    case CMDGET:
+                        //timer_pointer_of(p)->status = 1;
+                        if(!is_ex_dict_open && !s1_get(timer_pointer_of(p))) goto CONV_END;
                     break;
-                }
-            } else if(cp->cmd < 8) {
-                if(cmdpacket_decrypt(cp, index, cfg.sps)) {
-                    cp->data[cp->datalen] = 0;
-                    timer_pointer_of(p)->dat = (char*)cp->data;
-                    timer_pointer_of(p)->numbytes = cp->datalen;
-                    printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
-                    switch(cp->cmd) {
-                        case CMDSET:
-                            //timer_pointer_of(p)->status = 2;
-                            if(!is_ex_dict_open && !s2_set(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDDEL:
-                            //timer_pointer_of(p)->status = 4;
-                            if(!is_ex_dict_open && !s4_del(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        case CMDDAT:
-                            if(is_ex_dict_open && !s3_set_data(timer_pointer_of(p))) goto CONV_END;
-                        break;
-                        default: goto CONV_END; break;
-                    }
-                } else {
-                    puts("Decrypt super data failed");
+                    case CMDCAT:
+                        if(!is_ex_dict_open && !send_all(timer_pointer_of(p))) goto CONV_END;
                     break;
+                    case CMDMD5:
+                        //timer_pointer_of(p)->status = 5;
+                        if(!is_ex_dict_open && !s5_md5(timer_pointer_of(p))) goto CONV_END;
+                    break;
+                    case CMDACK: break;
+                    case CMDEND:
+                    default: goto CONV_END; break;
                 }
             } else {
-                puts("Invalid command");
+                puts("Decrypt normal data failed");
                 break;
             }
-            if(offset > numbytes) {
-                offset -= numbytes;
-                memmove(buff, buff+numbytes, offset);
-                numbytes = 0;
-            } else offset = 0;
-            #ifdef DEBUG
-                printf("Offset after analyzing packet: %zd\n", offset);
-            #endif
+        } else if(cp->cmd < 8) {
+            if(cmdpacket_decrypt(cp, index, cfg.sps)) {
+                cp->data[cp->datalen] = 0;
+                timer_pointer_of(p)->dat = (char*)cp->data;
+                timer_pointer_of(p)->numbytes = cp->datalen;
+                printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
+                switch(cp->cmd) {
+                    case CMDSET:
+                        //timer_pointer_of(p)->status = 2;
+                        if(!is_ex_dict_open && !s2_set(timer_pointer_of(p))) goto CONV_END;
+                    break;
+                    case CMDDEL:
+                        //timer_pointer_of(p)->status = 4;
+                        if(!is_ex_dict_open && !s4_del(timer_pointer_of(p))) goto CONV_END;
+                    break;
+                    case CMDDAT:
+                        if(is_ex_dict_open && !s3_set_data(timer_pointer_of(p))) goto CONV_END;
+                    break;
+                    default: goto CONV_END; break;
+                }
+            } else {
+                puts("Decrypt super data failed");
+                break;
+            }
+        } else {
+            puts("Invalid command");
+            break;
         }
-        CONV_END: puts("Conversation end");
-    } else perror("Error allocating buffer: ");
+        if(offset > numbytes) {
+            offset -= numbytes;
+            memmove(buff, buff+numbytes, offset);
+            numbytes = 0;
+        } else offset = 0;
+        #ifdef DEBUG
+            printf("Offset after analyzing packet: %zd\n", offset);
+        #endif
+    }
+    CONV_END: puts("Conversation end");
     pthread_cleanup_pop(1);
     pthread_cleanup_pop(1);
     puts("Thread exited normally");
@@ -614,7 +625,6 @@ static void accept_client() {
         timer->accept_fd = accept_fd;
         timer->index = p;
         timer->touch = time(NULL);
-        timer->ptr = NULL;
         reset_seq(p);
         if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
             perror("Error creating thread: ");

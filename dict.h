@@ -30,7 +30,6 @@ static FILE* dict_fp_read = NULL;    //fp for md5
 static FILE* dict_thread_fp[THREADCNT];
 static pthread_rwlock_t mu;
 
-
 #ifdef CPUBIT64
     #define _dict_md5_2 ((uint64_t*)&dict_md5)
 #else
@@ -127,10 +126,12 @@ static FILE* get_dict_fp_rd() {
 }
 
 static inline void close_ex_dict() {
-    fflush(dict_fp);
-    is_ex_dict_open = 0;
-    pthread_rwlock_unlock(&mu);
-    puts("Close ex dict");
+    if(is_ex_dict_open) {
+        fflush(dict_fp);
+        is_ex_dict_open = 0;
+        pthread_rwlock_unlock(&mu);
+        puts("Close ex dict");
+    } else puts("Ex dict already closed");
 }
 
 static inline void close_shared_dict() {
