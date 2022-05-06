@@ -37,7 +37,7 @@ static pthread_rwlock_t mu;
     #define _dict_md5_4 ((uint32_t*)&dict_md5)
 #endif
 
-static off_t get_dict_size() {
+static inline off_t get_dict_size() {
     struct stat statbuf;
     if(stat(dict_filepath, &statbuf)==0) {
         return statbuf.st_size;
@@ -92,7 +92,7 @@ static int init_dict(char* file_path, pthread_rwlock_t* mu) {
     return 2;
 }
 
-static inline FILE* open_ex_dict() {
+static FILE* open_ex_dict() {
     is_ex_dict_opening = 1;
     if(pthread_rwlock_wrlock(&mu)) {
         perror("Open dict: Writelock busy");
@@ -106,7 +106,7 @@ static inline FILE* open_ex_dict() {
     return dict_fp;
 }
 
-static inline FILE* open_shared_dict(uint32_t index) {
+static FILE* open_shared_dict(uint32_t index) {
     if(index >= THREADCNT) {
         puts("Open dict: Index out of bounds");
         return NULL;
@@ -120,21 +120,27 @@ static inline FILE* open_shared_dict(uint32_t index) {
     return dict_thread_fp[index];
 }
 
-static FILE* get_dict_fp_rd() {
+static inline FILE* get_dict_fp_rd() {
     rewind(dict_fp_read);
     return dict_fp_read;
 }
 
-static inline void close_ex_dict() {
+static void close_ex_dict() {
     if(is_ex_dict_open) {
         fflush(dict_fp);
+        for(int i = 0; i < THREADCNT; i++) {
+            if(dict_thread_fp[i]) {
+                fclose(dict_thread_fp[i]); // 关闭所有 fp 以同步数据
+                dict_thread_fp[i] = NULL;
+            }
+        }
         is_ex_dict_open = 0;
         pthread_rwlock_unlock(&mu);
         puts("Close ex dict");
     } else puts("Ex dict already closed");
 }
 
-static inline void close_shared_dict() {
+static void close_shared_dict() {
     pthread_rwlock_unlock(&mu);
     puts("Close shared dict");
 }
