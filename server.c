@@ -132,7 +132,7 @@ static int send_data(int accept_fd, int index, server_ack_t cmd, const char *dat
         perror("Send data error");
         return 0;
     } else {
-        printf("Send %d bytes data", total);
+        printf("Send %d bytes data: ", total);
         for(int i = 0; i < length; i++) putchar(data[i]);
         putchar('\n');
         return 1;
@@ -253,7 +253,7 @@ static int s1_get(thread_timer_t *timer) {
 static int s2_set(thread_timer_t *timer) {
     memset(&setdicts[timer->index], 0, sizeof(dict_t));
     strncpy(setdicts[timer->index].key, timer->dat, DICTKEYSZ-1);
-    md5((uint8_t*)timer->dat, strlen(timer->dat)+1, setdicts[timer->index].data);
+    md5((uint8_t*)timer->dat, strlen(timer->dat)+1, (uint8_t*)setdicts[timer->index].data);
     return send_data(timer->accept_fd, timer->index, ACKDATA, "data", 4);
 }
 
@@ -370,7 +370,7 @@ static int s3_set_data(thread_timer_t *timer) {
         fprintf(stderr, "Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
         r = send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     } else {
-        printf("Set data: dict[%s]=%s\n", setdict->key, timer->dat);
+        printf("Set dict[%s]=%s\n", setdict->key, timer->dat);
         r = send_data(timer->accept_fd, timer->index,  ACKSUCC, "succ", 4);
     }
 
@@ -537,7 +537,7 @@ static void handle_pipe(int signo) {
 }
 
 static void handle_accept(void *p) {
-    puts("\nConnected to the client, handling accept...");
+    puts("Connected to the client, handling accept...");
     pthread_t thread;
     if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
         perror("Error creating timer thread");
@@ -674,7 +674,6 @@ static void accept_client(int fd) {
             sleep(1);
             continue;
         }
-        printf("Thread slot is empty at No.%d\n", p);
         #ifdef LISTEN_ON_IPV6
             struct sockaddr_in6 client_addr;
         #else
@@ -694,7 +693,7 @@ static void accept_client(int fd) {
             char str[INET_ADDRSTRLEN];	// 16
             inet_ntop(AF_INET, &in, str, sizeof(str));
         #endif
-        printf("Accept client %s:%u\n", str, port);
+        printf("\nAccept client %s:%u at slot No.%d\n", str, port, p);
         thread_timer_t* timer = &timers[p];
         timer->accept_fd = accept_fd;
         timer->index = p;

@@ -165,8 +165,8 @@ static int cmdpacket_decrypt(cmdpacket_t p, int index, const char pwd[64]) {
         printf("decrypt md5: ");
         for(int i = 0; i < 16; i++) printf("%02x", datamd5[i]);
         putchar('\n');
-        printf("decrypted data len: %u, data: ", (unsigned int)tout->len);
-        for(int i = 0; i < tout->len; i++) printf("%02x", tout->data[i]);
+        printf("decrypted data len: %u, data: ", (unsigned int)tout.len);
+        for(int i = 0; i < tout.len; i++) printf("%02x", tout.data[i]);
         putchar('\n');
     #endif
     if(is_md5_equal((uint8_t*)datamd5, p->md5)) {
