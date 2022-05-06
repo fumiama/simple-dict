@@ -58,7 +58,7 @@ Now you have connected to the server. The default access passwords is in `client
 
 A cmd sequence example is as below
 
-https://user-images.githubusercontent.com/41315874/163713542-5d8c6eda-2ff4-4a09-8a0e-8865292c0022.mp4
+https://user-images.githubusercontent.com/41315874/167127391-1798f7ec-f917-4246-b31f-258db9dc771e.mp4
 
 ## Android Client for simple-dict-server
 There is also an [Android Client](https://github.com/fumiama/simple-dict-android) for simple-dict-server. Just install the apk file downloaded from release page and click `config` icon to set your server address using the format
