@@ -180,7 +180,10 @@ static void init_dict_pool(FILE *fp) {
     while(has_next(fp, ch)) {
         if(!ch) continue; // skip null bytes
         SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
-        if(!spb) continue; // skip error bytes
+        if(!spb) {
+            fputs("Bad spb file", stderr);
+            exit(EXIT_FAILURE);
+        }
         dict_t* d = (dict_t*)spb->target;
         md5((uint8_t *)d->key, strlen(d->key)+1, digest);
         uint8_t* dp = digest;
@@ -215,7 +218,6 @@ static int s1_get(thread_timer_t *timer) {
     FILE *fp = open_shared_dict(timer->index);
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     int ret = -1;
-    //timer->status = 0;
     pthread_cleanup_push((void*)&close_shared_dict, NULL);
     while(1) {
         int ch;
@@ -265,7 +267,10 @@ static int insert_item(FILE *fp, const dict_t* dict, int keysize, int datasize) 
     while(has_next(fp, ch)) {
         if(!ch) continue; // skip null bytes
         SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
-        if(!spb) continue; // skip error bytes
+        if(!spb) {
+            fputs("Bad spb file", stderr);
+            pthread_exit(NULL);
+        }
         dict_t* d = (dict_t*)spb->target;
         if(memcmp(key, d->key, keysize)) continue;
         int datalen = last_nonnull(d->data, DICTDATSZ);
@@ -325,7 +330,6 @@ ERR_INSERT_ITEM:
 }
 
 static int s3_set_data(thread_timer_t *timer) {
-    //timer->status = 0;
     FILE *fp = open_ex_dict();
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
@@ -384,7 +388,10 @@ static server_ack_t del(FILE *fp, const char* key, int len, char ret[4]) {
     while(has_next(fp, ch)) {
         if(!ch) continue; // skip null bytes
         SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
-        if(!spb) continue; // skip error bytes
+        if(!spb)  {
+            fputs("Bad spb file", stderr);
+            pthread_exit(NULL);
+        }
         dict_t* d = (dict_t*)spb->target;
         if(memcmp(key, d->key, len)) continue;
         uint32_t next = ftell(fp);
@@ -471,7 +478,6 @@ static int s4_del(thread_timer_t *timer) {
 }
 
 static int s5_md5(thread_timer_t *timer) {
-    //timer->status = 0;
     fill_md5(&mu);
     if(is_dict_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
     else return send_data(timer->accept_fd, timer->index, ACKNEQU, "nequ", 4);
@@ -585,14 +591,12 @@ static void handle_accept(void *p) {
                 printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
                 switch(cp->cmd) {
                     case CMDGET:
-                        //timer_pointer_of(p)->status = 1;
                         if(!is_ex_dict_open && !s1_get(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDCAT:
                         if(!is_ex_dict_open && !send_all(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDMD5:
-                        //timer_pointer_of(p)->status = 5;
                         if(!is_ex_dict_open && !s5_md5(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDACK: break;
@@ -611,11 +615,9 @@ static void handle_accept(void *p) {
                 printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
                 switch(cp->cmd) {
                     case CMDSET:
-                        //timer_pointer_of(p)->status = 2;
                         if(!is_ex_dict_open && !s2_set(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDDEL:
-                        //timer_pointer_of(p)->status = 4;
                         if(!is_ex_dict_open && !s4_del(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDDAT:
@@ -648,7 +650,7 @@ static void handle_accept(void *p) {
 
 static void accept_client(int fd) {
     /*pid_t pid = fork();
-    while (pid > 0) {      //主进程监控子进程状态，如果子进程异常终止则重启之
+    while (pid > 0) {      // 主进程监控子进程状态，如果子进程异常终止则重启之
         wait(NULL);
         puts("Server subprocess exited. Restart...");
         pid = fork();

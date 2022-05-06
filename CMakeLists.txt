@@ -3,7 +3,7 @@ project(simple-dict-server C)
 SET(CMAKE_BUILD_TYPE "Release")
 
 add_definitions(-DLISTEN_ON_IPV6)
-add_definitions(-DDEBUG)
+#add_definitions(-DDEBUG)
 IF(CMAKE_SIZEOF_VOID_P EQUAL 8)
     add_definitions("-DCPUBIT64")
 ELSE()
