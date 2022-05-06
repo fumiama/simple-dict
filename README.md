@@ -31,7 +31,7 @@ Start server on localhost using the commands below.
 ```bash
 chmod +x simple-dict-server simple-dict-client
 Usage:
-./simple-dict-server [-d] listen_port dict_file [config_file | -]
+./simple-dict-server [-d] listen_port dict_file [ config_file | - ]
         -d: As daemon
         - : Read config from env SDS_PWD & SDS_SPS
 ```
@@ -41,7 +41,7 @@ Open another shell to connect to it.
 ```bash
 ./simple-dict-client 127.0.0.1 7777
 ```
-Now you have connected to the server. The default access passwords is in `client.c` and you can modify the password in source code as you like. Please note that the server will only wait `4` seconds for a response after the last communication. The box below shows how to control the server to accompilsh basic add/del/find/edit operations.
+Now you have connected to the server. The default access passwords is in `client.c` and you can modify the password in source code as you like. Please note that the server will only wait `4` seconds for a response after the last communication. You can go to `server.h` to edit this limit. The box below shows how to control the server to accompilsh basic add/del/find/edit operations.
 
 |  cmd  |  data  |  description  |  reply  |
 |  ----  | ----  | ----  | ----- |

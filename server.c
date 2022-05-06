@@ -330,6 +330,7 @@ ERR_INSERT_ITEM:
 }
 
 static int s3_set_data(thread_timer_t *timer) {
+    if(!setdicts[timer->index].data[0]) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     FILE *fp = open_ex_dict();
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
@@ -377,6 +378,8 @@ static int s3_set_data(thread_timer_t *timer) {
         printf("Set dict[%s]=%s\n", setdict->key, timer->dat);
         r = send_data(timer->accept_fd, timer->index,  ACKSUCC, "succ", 4);
     }
+
+    setdicts[timer->index].data[0] = 0;
 
     pthread_cleanup_pop(1);
     return r;
@@ -523,6 +526,7 @@ static void cleanup_thread(thread_timer_t* timer) {
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
     puts("Start cleaning");
     timer->thread = 0;
+    setdicts[timer->index].data[0] = 0;
     if(timer->accept_fd) {
         close(timer->accept_fd);
         timer->accept_fd = 0;
