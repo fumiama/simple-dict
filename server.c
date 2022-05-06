@@ -147,7 +147,7 @@ static int send_all(thread_timer_t *timer) {
     off_t len = 0, file_size = get_dict_size();
     char* buf = (char*)malloc(file_size);
     if(buf) {
-        pthread_cleanup_push((void*)&free, (void*)&buf);
+        pthread_cleanup_push((void*)&free, (void*)buf);
         if(fread(buf, file_size, 1, fp) == 1) {
             #ifdef DEBUG
                 printf("Get dict file size: %u\n", (unsigned int)file_size);
@@ -158,7 +158,7 @@ static int send_all(thread_timer_t *timer) {
             //FILE* fp = fopen("raw_after_enc", "wb+");
             //fwrite(encbuf, file_size, 1, fp);
             //fclose(fp);
-            pthread_cleanup_push((void*)&free, (void*)&encbuf);
+            pthread_cleanup_push((void*)&free, (void*)encbuf);
             if(send(timer->accept_fd, timer->dat, strlen(timer->dat), 0) > 0) {
                 re = send(timer->accept_fd, encbuf, file_size, 0);
                 printf("Send %u bytes.\n", re);
