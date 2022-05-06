@@ -1,4 +1,4 @@
-# simple-dict-server
+# simple-dict
 database["key"]="value" with tea encryption.
 
 ## Prepare
