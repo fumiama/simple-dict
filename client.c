@@ -32,7 +32,7 @@ static char sps[64] = "minamoto";
 
 void getMessage(void *p) {
     int c = 0, offset = 0;
-    CMDPACKET* cp = (CMDPACKET*)bufr;
+    cmdpacket_t cp = (cmdpacket_t)bufr;
     while(offset >= CMDPACKET_HEAD_LEN || (c = recv(sockfd, bufr+offset, CMDPACKET_HEAD_LEN-offset, MSG_WAITALL)) > 0) {
         #ifdef DEBUG
             printf("Recv %d bytes.\n", c);
@@ -127,7 +127,7 @@ off_t file_size_of(const char* fname) {
     else return -1;
 }
 
-void send_cmd(int accept_fd, CMDPACKET* p) {
+void send_cmd(int accept_fd, cmdpacket_t p) {
     #ifdef DEBUG
         printf("send %d bytes encrypted data with %d bytes head.\n", p->datalen, CMDPACKET_HEAD_LEN);
         printf("raw packet: ");
@@ -188,7 +188,7 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
             }
             else {
                 buf[3] = 0;
-                CMDPACKET* p = malloc(CMDPACKET_LEN_MAX);
+                cmdpacket_t p = malloc(CMDPACKET_LEN_MAX);
                 if(!strcmp(buf, "set")) {
                     p->cmd = CMDSET;
                     p->datalen = strlen(buf+4);

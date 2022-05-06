@@ -93,7 +93,7 @@ static char* raw_decrypt(const char* buf, off_t* len, int index, const char pwd[
     return decbuf;
 }
 
-static void cmdpacket_encrypt(CMDPACKET* p, int index, const char pwd[64]) {
+static void cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64]) {
     TEADAT tin = {p->datalen, p->data};
     TEADAT tout;
     TEA tea[4];
@@ -134,7 +134,7 @@ static void cmdpacket_encrypt(CMDPACKET* p, int index, const char pwd[64]) {
     return;
 }
 
-static int cmdpacket_decrypt(CMDPACKET* p, int index, const char pwd[64]) {
+static int cmdpacket_decrypt(cmdpacket_t p, int index, const char pwd[64]) {
     TEADAT tin = {p->datalen, p->data};
     TEADAT tout;
     TEA tea[4];

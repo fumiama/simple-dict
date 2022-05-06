@@ -24,6 +24,7 @@ static char* dict_filepath;
 static uint8_t dict_md5[16];
 
 static volatile int is_ex_dict_open;
+static volatile int is_ex_dict_opening;
 
 static FILE* dict_fp = NULL;     //fp for EX
 static FILE* dict_fp_read = NULL;    //fp for md5
@@ -92,10 +93,13 @@ static int init_dict(char* file_path, pthread_rwlock_t* mu) {
 }
 
 static inline FILE* open_ex_dict() {
+    is_ex_dict_opening = 1;
     if(pthread_rwlock_wrlock(&mu)) {
         perror("Open dict: Writelock busy");
+        is_ex_dict_opening = 0;
         return NULL;
     }
+    is_ex_dict_opening = 0;
     if(!dict_fp) dict_fp = fopen(dict_filepath, "rb+");
     else rewind(dict_fp);
     if(dict_fp) is_ex_dict_open = 1;
@@ -114,10 +118,6 @@ static inline FILE* open_shared_dict(uint32_t index) {
     if(!dict_thread_fp[index]) dict_thread_fp[index] = fopen(dict_filepath, "rb");
     else rewind(dict_thread_fp[index]);
     return dict_thread_fp[index];
-}
-
-static FILE* get_dict_fp_wr() {
-    return dict_fp;
 }
 
 static FILE* get_dict_fp_rd() {
