@@ -63,6 +63,6 @@ https://user-images.githubusercontent.com/41315874/167127391-1798f7ec-f917-4246-
 ## Android Client for simple-dict-server
 There is also an [Android Client](https://github.com/fumiama/simple-dict-android) for simple-dict-server. Just install the apk file downloaded from release page and click `config` icon to set your server address using the format
 ```
-127.0.0.1:7777_password
+127.0.0.1:7777_password^superpassword
 ```
 Note that this APP is designed for a new language called `Tenenja`, so the font inside is abnormal. What's more, there is no English translation for this APP because its users are Chinese. If you want to get an APP in your language, just edit the source code for free.
