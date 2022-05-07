@@ -720,7 +720,8 @@ static void accept_client(int fd) {
             char str[INET_ADDRSTRLEN];	// 16
             inet_ntop(AF_INET, &in, str, sizeof(str));
         #endif
-        printf("\nAccept client %s:%u at slot No.%d\n", str, port, p);
+        time_t t = time(NULL);
+        printf("\n> %sAccept client %s:%u at slot No.%d\n", ctime(&t), str, port, p);
         thread_timer_t* timer = &timers[p];
         timer->accept_fd = accept_fd;
         timer->index = p;
