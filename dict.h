@@ -25,6 +25,7 @@ static uint8_t dict_md5[16];
 
 static volatile int is_ex_dict_open;
 static volatile int is_ex_dict_opening;
+static volatile uint32_t ex_dict_owner_index = (uint32_t)-1;
 
 static FILE* dict_fp = NULL;     // fp for EX
 static FILE* dict_thread_fp[THREADCNT];
@@ -89,17 +90,23 @@ static int init_dict(char* file_path) {
     return 2;
 }
 
-static inline FILE* open_ex_dict() {
+static inline FILE* open_ex_dict(uint32_t index) {
     is_ex_dict_opening = 1;
     if(pthread_rwlock_wrlock(&mu)) {
-        perror("Open dict: Writelock busy");
+        perror("Open ex dict: Writelock busy");
         is_ex_dict_opening = 0;
         return NULL;
     }
     is_ex_dict_opening = 0;
     if(!dict_fp) dict_fp = fopen(dict_filepath, "rb+");
     else rewind(dict_fp);
-    if(dict_fp) is_ex_dict_open = 1;
+    if(!dict_fp) {
+        perror("Open ex dict: fopen");
+        pthread_rwlock_unlock(&mu);
+        return NULL;
+    }
+    is_ex_dict_open = 1;
+    ex_dict_owner_index = index;
     puts("Open ex dict");
     return dict_fp;
 }
@@ -132,7 +139,8 @@ static inline int require_shared_lock(uint32_t index) {
     return 0;
 }
 
-static inline void close_ex_dict() {
+static inline void close_ex_dict(uint32_t index) {
+    if(index != ex_dict_owner_index) return;
     if(is_ex_dict_open) {
         fflush(dict_fp);
         for(int i = 0; i < THREADCNT; i++) {
@@ -142,6 +150,7 @@ static inline void close_ex_dict() {
             }
         }
         is_ex_dict_open = 0;
+        ex_dict_owner_index = (uint32_t)-1;
         pthread_rwlock_unlock(&mu);
         puts("Close ex dict");
     } else puts("Ex dict already closed");

@@ -338,7 +338,7 @@ ERR_INSERT_ITEM:
 
 static int s3_set_data(thread_timer_t *timer) {
     if(!setdicts[timer->index].data[0]) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
-    FILE *fp = open_ex_dict();
+    FILE *fp = open_ex_dict(timer->index);
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
     int datasize = (timer->numbytes > (DICTDATSZ-1))?(DICTDATSZ-1):timer->numbytes;
@@ -349,7 +349,7 @@ static int s3_set_data(thread_timer_t *timer) {
         return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
     int r;
-    pthread_cleanup_push((void*)&close_ex_dict, NULL); 
+    pthread_cleanup_push((void*)&close_ex_dict, (void*)(uintptr_t)timer->index);
 
     uint8_t* dp = (uint8_t*)setdicts[timer->index].data;
     touch_timer(timer);
@@ -463,10 +463,10 @@ static int s4_del(thread_timer_t *timer) {
     uint8_t digest[16];
     char ret[4];
     int r;
-    FILE *fp = open_ex_dict();
+    FILE *fp = open_ex_dict(timer->index);
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
-    pthread_cleanup_push((void*)&close_ex_dict, NULL);
+    pthread_cleanup_push((void*)&close_ex_dict, (void*)(uintptr_t)timer->index);
     while(1) {
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
@@ -551,7 +551,7 @@ static void cleanup_thread(thread_timer_t* timer) {
         timer->accept_fd = 0;
         puts("Close accept");
     }
-    close_ex_dict();
+    close_ex_dict(timer->index);
     puts("Finish cleaning");
 }
 
@@ -566,7 +566,7 @@ static void handle_pipe(int signo) {
 }
 
 static void handle_accept(void *p) {
-    puts("Connected to the client, handling accept...");
+    puts("Handling accept...");
     pthread_t thread;
     if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
         perror("Error creating timer thread");
