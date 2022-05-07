@@ -64,7 +64,6 @@ static void handle_quit(int signo);
 static void handle_segv(int signo);
 static void init_dict_pool(FILE *fp);
 static int insert_item(FILE *fp, const dict_t* dict, int keysize, int datasize);
-static void kill_timer(pthread_t thread);
 static inline uint32_t last_nonnull(const char* p, uint32_t max_size);
 static int listen_socket(int fd);
 static int send_all(thread_timer_t *timer);
@@ -225,15 +224,27 @@ static int s1_get(thread_timer_t *timer) {
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
-        if(!dict_pool[p]) break;
+        if(!dict_pool[p]) break; // 无值
 
         int c = 16-4;
         int notok = 1;
-        while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
-        if(!notok) {
+        while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) {
+            #ifdef DEBUG
+                printf("digest of %s: %08x got conflicted, remaining chance: %d.\n", timer->dat, p, c);
+            #endif
+            p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+            #ifdef DEBUG
+                printf("skip digest of %s to %08x.\n", timer->dat, p);
+            #endif
+        }
+        if(!notok) { // 找到值
             ret = send_data(timer->accept_fd, timer->index, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
             break;
         }
+        if(!dict_pool[p]) break; // 无值
+        #ifdef DEBUG
+            printf("cannot find any empty slot for digest of %s: %08x, open dict to find it.\n", timer->dat, p);
+        #endif
 
         FILE *fp = open_shared_dict(timer->index, 0); // really open
         if(fp == NULL) {
@@ -363,7 +374,15 @@ static int s3_set_data(thread_timer_t *timer) {
     else {
         int c = 16-4;
         int notok;
-        while(dict_pool[p] && (notok=strcmp(setdicts[timer->index].key, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+        while(dict_pool[p] && (notok=strcmp(setdicts[timer->index].key, dict_pool[p]->key)) && c-->0) {
+            #ifdef DEBUG
+                printf("digest of %s: %08x got conflicted, remaining chance: %d.\n", setdicts[timer->index].key, p, c);
+            #endif
+            p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+            #ifdef DEBUG
+                printf("skip digest of %s to %08x.\n", setdicts[timer->index].key, p);
+            #endif
+        }
         if(!dict_pool[p]) {
             setdict = dict_pool[p] = (dict_t*)malloc(sizeof(dict_t)); // 无值
             memcpy(setdict->key, setdicts[timer->index].key, DICTKEYSZ);
@@ -473,8 +492,16 @@ static int s4_del(thread_timer_t *timer) {
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
         int c = 16-4;
         int notok = 1;
-        while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
-        if(notok) {
+        while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) {
+            #ifdef DEBUG
+                printf("digest of %s: %08x got conflicted, remaining chance: %d.\n", timer->dat, p, c);
+            #endif
+            p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
+            #ifdef DEBUG
+                printf("skip digest of %s to %08x.\n", timer->dat, p);
+            #endif
+        }
+        if(!dict_pool[p] || notok) {
             r = send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
             break;
         }
@@ -533,11 +560,6 @@ static void accept_timer(void *p) {
     }
 }
 
-static void kill_timer(pthread_t thread) {
-    pthread_kill(thread, SIGQUIT);
-    puts("Kill timer");
-}
-
 static void cleanup_thread(thread_timer_t* timer) {
     sigset_t mask;
     sigemptyset(&mask);
@@ -575,7 +597,6 @@ static void handle_accept(void *p) {
     }
     puts("Creating timer thread succeeded");
     pthread_cleanup_push((void*)&cleanup_thread, p);
-    pthread_cleanup_push((void*)&kill_timer, thread);
     int accept_fd = timer_pointer_of(p)->accept_fd;
     uint32_t index = timer_pointer_of(p)->index;
     uint8_t *buff = timer_pointer_of(p)->buf;
@@ -667,7 +688,6 @@ static void handle_accept(void *p) {
         #endif
     }
     CONV_END: puts("Conversation end");
-    pthread_cleanup_pop(1);
     pthread_cleanup_pop(1);
     puts("Thread exited normally");
 }
