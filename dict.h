@@ -26,8 +26,7 @@ static uint8_t dict_md5[16];
 static volatile int is_ex_dict_open;
 static volatile int is_ex_dict_opening;
 
-static FILE* dict_fp = NULL;     //fp for EX
-static FILE* dict_fp_read = NULL;    //fp for md5
+static FILE* dict_fp = NULL;     // fp for EX
 static FILE* dict_thread_fp[THREADCNT];
 static pthread_rwlock_t mu;
 
@@ -45,7 +44,7 @@ static inline off_t get_dict_size() {
     return -1;
 }
 
-static int fill_md5(pthread_rwlock_t* mu) {
+static int fill_md5(FILE* fp) {
     size_t size = get_dict_size();
     if(!size) {
         memset(dict_md5, 0, 16);
@@ -54,18 +53,17 @@ static int fill_md5(pthread_rwlock_t* mu) {
     }
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
-        if(pthread_rwlock_tryrdlock(mu)) {
+        if(pthread_rwlock_tryrdlock(&mu)) {
             perror("Readlock busy");
             return 1;
         }
-        rewind(dict_fp_read);
-        if(fread(dict_buff, size, 1, dict_fp_read) == 1) {
-            pthread_rwlock_unlock(mu);
+        if(fread(dict_buff, size, 1, fp) == 1) {
+            pthread_rwlock_unlock(&mu);
             md5(dict_buff, size, dict_md5);
             free(dict_buff);
             return 0;
         } else {
-            pthread_rwlock_unlock(mu);
+            pthread_rwlock_unlock(&mu);
             free(dict_buff);
             perror("Read dict error");
             return 2;
@@ -76,23 +74,22 @@ static int fill_md5(pthread_rwlock_t* mu) {
     }
 }
 
-static int init_dict(char* file_path, pthread_rwlock_t* mu) {
+static int init_dict(char* file_path) {
     dict_fp = fopen(file_path, "rb+");
-    dict_fp_read = fopen(file_path, "rb");
     if(dict_fp) {
-        int err = pthread_rwlock_init(mu, NULL);
+        int err = pthread_rwlock_init(&mu, NULL);
         if(err) {
             perror("Init lock error");
             return 1;
         }
         dict_filepath = file_path;
-        return fill_md5(mu);
+        return fill_md5(dict_fp);
     }
     perror("Open dict error");
     return 2;
 }
 
-static FILE* open_ex_dict() {
+static inline FILE* open_ex_dict() {
     is_ex_dict_opening = 1;
     if(pthread_rwlock_wrlock(&mu)) {
         perror("Open dict: Writelock busy");
@@ -106,12 +103,12 @@ static FILE* open_ex_dict() {
     return dict_fp;
 }
 
-static FILE* open_shared_dict(uint32_t index) {
+static inline FILE* open_shared_dict(uint32_t index, int requirelock) {
     if(index >= THREADCNT) {
         puts("Open dict: Index out of bounds");
         return NULL;
     }
-    if(pthread_rwlock_tryrdlock(&mu)) {
+    if(requirelock && pthread_rwlock_tryrdlock(&mu)) {
         perror("Open dict: Readlock busy");
         return NULL;
     }
@@ -120,12 +117,19 @@ static FILE* open_shared_dict(uint32_t index) {
     return dict_thread_fp[index];
 }
 
-static inline FILE* get_dict_fp_rd() {
-    rewind(dict_fp_read);
-    return dict_fp_read;
+static inline int require_shared_lock(uint32_t index) {
+    if(index >= THREADCNT) {
+        puts("Open dict: Index out of bounds");
+        return 1;
+    }
+    if(pthread_rwlock_tryrdlock(&mu)) {
+        perror("Open dict: Readlock busy");
+        return 1;
+    }
+    return 0;
 }
 
-static void close_ex_dict() {
+static inline void close_ex_dict() {
     if(is_ex_dict_open) {
         fflush(dict_fp);
         for(int i = 0; i < THREADCNT; i++) {
@@ -140,7 +144,7 @@ static void close_ex_dict() {
     } else puts("Ex dict already closed");
 }
 
-static void close_shared_dict() {
+static inline void close_shared_dict() {
     pthread_rwlock_unlock(&mu);
     puts("Close shared dict");
 }

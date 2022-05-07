@@ -61,6 +61,7 @@ static void handle_accept(void *accept_fd_p);
 static void handle_int(int signo);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
+static void handle_segv(int signo);
 static void init_dict_pool(FILE *fp);
 static int insert_item(FILE *fp, const dict_t* dict, int keysize, int datasize);
 static void kill_timer(pthread_t thread);
@@ -141,7 +142,7 @@ static int send_data(int accept_fd, int index, server_ack_t cmd, const char *dat
 
 static int send_all(thread_timer_t *timer) {
     int re = 1;
-    FILE *fp = open_shared_dict(timer->index);
+    FILE *fp = open_shared_dict(timer->index, 1);
     if(fp == NULL) return 1;
     pthread_cleanup_push((void*)&close_shared_dict, NULL);
     off_t len = 0, file_size = get_dict_size();
@@ -215,8 +216,8 @@ static void init_dict_pool(FILE *fp) {
 static int s1_get(thread_timer_t *timer) {
     uint8_t digest[16];
     uint8_t buf[8+DICTSZ];
-    FILE *fp = open_shared_dict(timer->index);
-    if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    if(require_shared_lock(timer->index)) // busy
+        return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     int ret = -1;
     pthread_cleanup_push((void*)&close_shared_dict, NULL);
     while(1) {
@@ -231,6 +232,12 @@ static int s1_get(thread_timer_t *timer) {
         while(dict_pool[p] && (notok=strcmp(timer->dat, dict_pool[p]->key)) && c-->0) p = ((*((uint32_t*)(++dp)))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ; // 哈希碰撞
         if(!notok) {
             ret = send_data(timer->accept_fd, timer->index, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
+            break;
+        }
+
+        FILE *fp = open_shared_dict(timer->index, 0); // really open
+        if(fp == NULL) {
+            ret = send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
             break;
         }
 
@@ -481,13 +488,25 @@ static int s4_del(thread_timer_t *timer) {
 }
 
 static int s5_md5(thread_timer_t *timer) {
-    fill_md5(&mu);
-    if(is_dict_md5_equal((uint8_t*)timer->dat)) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
+    FILE* fp = open_shared_dict(timer->index, 1);
+    if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    int r;
+    pthread_cleanup_push((void*)&close_shared_dict, NULL);
+    fill_md5(fp);
+    r = is_dict_md5_equal((uint8_t*)timer->dat);
+    pthread_cleanup_pop(1);
+    if(r) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
     else return send_data(timer->accept_fd, timer->index, ACKNEQU, "nequ", 4);
 }
 
 static void handle_quit(int signo) {
     puts("Handle sigquit");
+    pthread_exit(NULL);
+}
+
+static void handle_segv(int signo) {
+    puts("Handle kill/segv/term");
+    fflush(stdout);
     pthread_exit(NULL);
 }
 
@@ -665,12 +684,14 @@ static void accept_client(int fd) {
     }*/
     signal(SIGINT,  handle_int);
     signal(SIGQUIT, handle_quit);
-    signal(SIGKILL, exit);
+    signal(SIGKILL, handle_segv);
+    signal(SIGSEGV, handle_segv);
     signal(SIGPIPE, handle_pipe);
+    signal(SIGTERM, handle_segv);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
-    init_dict_pool(get_dict_fp_rd());
+    init_dict_pool(open_shared_dict(0, 0));
     while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;
@@ -742,7 +763,7 @@ int main(int argc, char *argv[]) {
         return 3;
     }
     fclose(fp);
-    if(init_dict(argv[as_daemon?3:2], &mu))
+    if(init_dict(argv[as_daemon?3:2]))
         return 4;
     fp = NULL;
     if(argv[as_daemon?4:3][0] == '-') { // use env
