@@ -100,6 +100,7 @@ static inline FILE* open_ex_dict() {
     if(!dict_fp) dict_fp = fopen(dict_filepath, "rb+");
     else rewind(dict_fp);
     if(dict_fp) is_ex_dict_open = 1;
+    puts("Open ex dict");
     return dict_fp;
 }
 
@@ -114,6 +115,7 @@ static inline FILE* open_shared_dict(uint32_t index, int requirelock) {
     }
     if(!dict_thread_fp[index]) dict_thread_fp[index] = fopen(dict_filepath, "rb");
     else rewind(dict_thread_fp[index]);
+    puts("Open shared dict");
     return dict_thread_fp[index];
 }
 
@@ -126,6 +128,7 @@ static inline int require_shared_lock(uint32_t index) {
         perror("Open dict: Readlock busy");
         return 1;
     }
+    puts("Shared lock required");
     return 0;
 }
 
