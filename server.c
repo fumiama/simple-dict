@@ -591,9 +591,10 @@ static void handle_accept(void *p) {
             printf("[handle] Get %zd bytes, total: %zd.\n", numbytes, offset);
         #endif
         if(offset < CMDPACKET_HEAD_LEN) break;
-        if(offset < CMDPACKET_HEAD_LEN+cp->datalen) {
-            numbytes = recv(accept_fd, buff+offset, CMDPACKET_HEAD_LEN+cp->datalen-offset, MSG_WAITALL);
-            if(numbytes <= 0) break;
+        if(offset < CMDPACKET_HEAD_LEN+(ssize_t)(cp->datalen)) {
+            ssize_t toread = CMDPACKET_HEAD_LEN+(ssize_t)(cp->datalen)-offset;
+            numbytes = recv(accept_fd, buff+offset, toread, MSG_WAITALL);
+            if(numbytes != toread) break;
             else {
                 offset += numbytes;
                 #ifdef DEBUG
@@ -601,16 +602,16 @@ static void handle_accept(void *p) {
                 #endif
             }
         }
-        numbytes = CMDPACKET_HEAD_LEN+cp->datalen; // 暂存 packet len
+        numbytes = CMDPACKET_HEAD_LEN+(ssize_t)(cp->datalen); // 暂存 packet len
         if(offset < numbytes) break;
         #ifdef DEBUG
             printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
         #endif
-        if(cp->cmd < 5) {
+        if(cp->cmd <= CMDEND) {
             if(cmdpacket_decrypt(cp, index, cfg.pwd)) {
                 cp->data[cp->datalen] = 0;
                 timer_pointer_of(p)->dat = (char*)cp->data;
-                timer_pointer_of(p)->numbytes = cp->datalen;
+                timer_pointer_of(p)->numbytes = (ssize_t)(cp->datalen);
                 printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
                 switch(cp->cmd) {
                     case CMDGET:
@@ -622,7 +623,7 @@ static void handle_accept(void *p) {
                     case CMDMD5:
                         if(!is_ex_dict_open && !s5_md5(timer_pointer_of(p))) goto CONV_END;
                     break;
-                    case CMDACK: break;
+                    case CMDACK:
                     case CMDEND:
                     default: goto CONV_END; break;
                 }
@@ -630,11 +631,11 @@ static void handle_accept(void *p) {
                 puts("Decrypt normal data failed");
                 break;
             }
-        } else if(cp->cmd < 8) {
+        } else if(cp->cmd <= CMDDAT) {
             if(cmdpacket_decrypt(cp, index, cfg.sps)) {
                 cp->data[cp->datalen] = 0;
                 timer_pointer_of(p)->dat = (char*)cp->data;
-                timer_pointer_of(p)->numbytes = cp->datalen;
+                timer_pointer_of(p)->numbytes = (ssize_t)(cp->datalen);
                 printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
                 switch(cp->cmd) {
                     case CMDSET:
