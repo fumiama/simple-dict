@@ -141,9 +141,9 @@ static int send_data(int accept_fd, int index, server_ack_t cmd, const char *dat
 
 static int send_all(thread_timer_t *timer) {
     int re = 1;
-    FILE *fp = open_shared_dict(timer->index, 1);
+    FILE *fp = open_dict(timer->index, 1);
     if(fp == NULL) return 1;
-    pthread_cleanup_push((void*)&close_shared_dict, NULL);
+    pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
     off_t len = 0, file_size = get_dict_size();
     char* buf = (char*)malloc(file_size);
     if(buf) {
@@ -215,10 +215,10 @@ static void init_dict_pool(FILE *fp) {
 static int s1_get(thread_timer_t *timer) {
     uint8_t digest[16];
     uint8_t buf[8+DICTSZ];
-    if(require_shared_lock(timer->index)) // busy
+    if(require_shared_lock()) // busy
         return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     int ret = -1;
-    pthread_cleanup_push((void*)&close_shared_dict, NULL);
+    pthread_cleanup_push((void*)&release_shared_lock, NULL);
     while(1) {
         int ch;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
@@ -246,12 +246,13 @@ static int s1_get(thread_timer_t *timer) {
             printf("cannot find any empty slot for digest of %s: %08x, open dict to find it.\n", timer->dat, p);
         #endif
 
-        FILE *fp = open_shared_dict(timer->index, 0); // really open
+        FILE *fp = open_dict(timer->index, 1); // really open
         if(fp == NULL) {
             ret = send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
             break;
         }
 
+        pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
         while(has_next(fp, ch)) {
             if(!ch) continue; // skip null bytes
             SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
@@ -262,6 +263,7 @@ static int s1_get(thread_timer_t *timer) {
                 break;
             }
         }
+        pthread_cleanup_pop(1);
 
         break;
     }
@@ -349,7 +351,7 @@ ERR_INSERT_ITEM:
 
 static int s3_set_data(thread_timer_t *timer) {
     if(!setdicts[timer->index].data[0]) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
-    FILE *fp = open_ex_dict(timer->index);
+    FILE *fp = open_dict(timer->index, 0);
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
     int datasize = (timer->numbytes > (DICTDATSZ-1))?(DICTDATSZ-1):timer->numbytes;
@@ -360,7 +362,7 @@ static int s3_set_data(thread_timer_t *timer) {
         return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
     int r;
-    pthread_cleanup_push((void*)&close_ex_dict, (void*)(uintptr_t)timer->index);
+    pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
 
     uint8_t* dp = (uint8_t*)setdicts[timer->index].data;
     touch_timer(timer);
@@ -482,10 +484,10 @@ static int s4_del(thread_timer_t *timer) {
     uint8_t digest[16];
     char ret[4];
     int r;
-    FILE *fp = open_ex_dict(timer->index);
+    FILE *fp = open_dict(timer->index, 0);
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
-    pthread_cleanup_push((void*)&close_ex_dict, (void*)(uintptr_t)timer->index);
+    pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
     while(1) {
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
@@ -515,10 +517,10 @@ static int s4_del(thread_timer_t *timer) {
 }
 
 static int s5_md5(thread_timer_t *timer) {
-    FILE* fp = open_shared_dict(timer->index, 1);
+    FILE* fp = open_dict(timer->index, 1);
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     int r;
-    pthread_cleanup_push((void*)&close_shared_dict, NULL);
+    pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
     fill_md5(fp);
     r = is_dict_md5_equal((uint8_t*)timer->dat);
     pthread_cleanup_pop(1);
@@ -549,7 +551,7 @@ static void accept_timer(void *p) {
 
     while(!pthread_kill(thread, 0)) {
         sleep(MAXWAITSEC / 4);
-        if(is_ex_dict_opening) touch_timer(p);
+        if(is_dict_opening) touch_timer(p);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
         if(waitsec > MAXWAITSEC) {
@@ -573,7 +575,7 @@ static void cleanup_thread(thread_timer_t* timer) {
         timer->accept_fd = 0;
         puts("Close accept");
     }
-    close_ex_dict(timer->index);
+    close_dict(timer->index);
     puts("Finish cleaning");
 }
 
@@ -636,13 +638,13 @@ static void handle_accept(void *p) {
                 printf("[normal] Get %zd bytes packet with cmd: %d, data: %s\n", offset, cp->cmd, cp->data);
                 switch(cp->cmd) {
                     case CMDGET:
-                        if(!is_ex_dict_open && !s1_get(timer_pointer_of(p))) goto CONV_END;
+                        if(!has_dict_opened && !s1_get(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDCAT:
-                        if(!is_ex_dict_open && !send_all(timer_pointer_of(p))) goto CONV_END;
+                        if(!has_dict_opened && !send_all(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDMD5:
-                        if(!is_ex_dict_open && !s5_md5(timer_pointer_of(p))) goto CONV_END;
+                        if(!has_dict_opened && !s5_md5(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDACK:
                     case CMDEND:
@@ -660,13 +662,13 @@ static void handle_accept(void *p) {
                 printf("[super] Get %zd bytes packet with data: %s\n", offset, cp->data);
                 switch(cp->cmd) {
                     case CMDSET:
-                        if(!is_ex_dict_open && !s2_set(timer_pointer_of(p))) goto CONV_END;
+                        if(!has_dict_opened && !s2_set(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDDEL:
-                        if(!is_ex_dict_open && !s4_del(timer_pointer_of(p))) goto CONV_END;
+                        if(!has_dict_opened && !s4_del(timer_pointer_of(p))) goto CONV_END;
                     break;
                     case CMDDAT:
-                        if(!is_ex_dict_open && !s3_set_data(timer_pointer_of(p))) goto CONV_END;
+                        if(!has_dict_opened && !s3_set_data(timer_pointer_of(p))) goto CONV_END;
                     break;
                     default: goto CONV_END; break;
                 }
@@ -712,7 +714,8 @@ static void accept_client(int fd) {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
-    init_dict_pool(open_shared_dict(0, 0));
+    init_dict_pool(open_dict(0, 1));
+    close_dict(0);
     while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;

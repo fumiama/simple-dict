@@ -23,12 +23,11 @@ typedef struct dict_t dict_t;
 static char* dict_filepath;
 static uint8_t dict_md5[16];
 
-static volatile int is_ex_dict_open;
-static volatile int is_ex_dict_opening;
-static volatile uint32_t ex_dict_owner_index = (uint32_t)-1;
+static volatile int has_dict_opened;
+static volatile int is_dict_opening;
+static volatile uint32_t dict_owner_index = (uint32_t)-1;
 
-static FILE* dict_fp = NULL;     // fp for EX
-static FILE* dict_thread_fp[THREADCNT];
+static FILE* dict_fp = NULL;
 static pthread_rwlock_t mu;
 
 #ifdef CPUBIT64
@@ -54,17 +53,11 @@ static int fill_md5(FILE* fp) {
     }
     uint8_t* dict_buff = (uint8_t*)malloc(size);
     if(dict_buff) {
-        if(pthread_rwlock_tryrdlock(&mu)) {
-            perror("Readlock busy");
-            return 1;
-        }
         if(fread(dict_buff, size, 1, fp) == 1) {
-            pthread_rwlock_unlock(&mu);
             md5(dict_buff, size, dict_md5);
             free(dict_buff);
             return 0;
         } else {
-            pthread_rwlock_unlock(&mu);
             free(dict_buff);
             perror("Read dict error");
             return 2;
@@ -76,61 +69,43 @@ static int fill_md5(FILE* fp) {
 }
 
 static int init_dict(char* file_path) {
-    dict_fp = fopen(file_path, "rb+");
-    if(dict_fp) {
+    FILE* fp = fopen(file_path, "rb+");
+    if(fp) {
         int err = pthread_rwlock_init(&mu, NULL);
         if(err) {
             perror("Init lock error");
             return 1;
         }
         dict_filepath = file_path;
-        return fill_md5(dict_fp);
+        err = fill_md5(fp);
+        fclose(fp);
+        return err;
     }
     perror("Open dict error");
     return 2;
 }
 
-static inline FILE* open_ex_dict(uint32_t index) {
-    is_ex_dict_opening = 1;
+static inline FILE* open_dict(uint32_t index, int isro) {
+    is_dict_opening = 1;
     if(pthread_rwlock_wrlock(&mu)) {
-        perror("Open ex dict: Writelock busy");
-        is_ex_dict_opening = 0;
+        perror("Open dict: Writelock busy");
+        is_dict_opening = 0;
         return NULL;
     }
-    is_ex_dict_opening = 0;
-    if(!dict_fp) dict_fp = fopen(dict_filepath, "rb+");
-    else rewind(dict_fp);
+    is_dict_opening = 0;
+    dict_fp = fopen(dict_filepath, isro?"rb":"rb+");
     if(!dict_fp) {
-        perror("Open ex dict: fopen");
+        perror("Open dict: fopen");
         pthread_rwlock_unlock(&mu);
         return NULL;
     }
-    is_ex_dict_open = 1;
-    ex_dict_owner_index = index;
-    puts("Open ex dict");
+    has_dict_opened = 1;
+    dict_owner_index = index;
+    puts("Open dict");
     return dict_fp;
 }
 
-static inline FILE* open_shared_dict(uint32_t index, int requirelock) {
-    if(index >= THREADCNT) {
-        puts("Open dict: Index out of bounds");
-        return NULL;
-    }
-    if(requirelock && pthread_rwlock_tryrdlock(&mu)) {
-        perror("Open dict: Readlock busy");
-        return NULL;
-    }
-    if(!dict_thread_fp[index]) dict_thread_fp[index] = fopen(dict_filepath, "rb");
-    else rewind(dict_thread_fp[index]);
-    puts("Open shared dict");
-    return dict_thread_fp[index];
-}
-
-static inline int require_shared_lock(uint32_t index) {
-    if(index >= THREADCNT) {
-        puts("Open dict: Index out of bounds");
-        return 1;
-    }
+static inline int require_shared_lock() {
     if(pthread_rwlock_tryrdlock(&mu)) {
         perror("Open dict: Readlock busy");
         return 1;
@@ -139,26 +114,21 @@ static inline int require_shared_lock(uint32_t index) {
     return 0;
 }
 
-static inline void close_ex_dict(uint32_t index) {
-    if(index != ex_dict_owner_index) return;
-    if(is_ex_dict_open) {
-        fflush(dict_fp);
-        for(int i = 0; i < THREADCNT; i++) {
-            if(dict_thread_fp[i]) {
-                fclose(dict_thread_fp[i]); // 关闭所有 fp 以同步数据
-                dict_thread_fp[i] = NULL;
-            }
-        }
-        is_ex_dict_open = 0;
-        ex_dict_owner_index = (uint32_t)-1;
-        pthread_rwlock_unlock(&mu);
-        puts("Close ex dict");
-    } else puts("Ex dict already closed");
+static inline void release_shared_lock() {
+    pthread_rwlock_unlock(&mu);
+    puts("Release shared lock");
 }
 
-static inline void close_shared_dict() {
-    pthread_rwlock_unlock(&mu);
-    puts("Close shared dict");
+static inline void close_dict(uint32_t index) {
+    if(index != dict_owner_index) return;
+    if(has_dict_opened) {
+        fclose(dict_fp);
+        dict_fp = NULL;
+        has_dict_opened = 0;
+        dict_owner_index = (uint32_t)-1;
+        pthread_rwlock_unlock(&mu);
+        puts("Close dict");
+    } else puts("Dict already closed");
 }
 
 static inline int is_dict_md5_equal(uint8_t* digest) {
