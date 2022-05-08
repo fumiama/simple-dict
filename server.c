@@ -218,13 +218,16 @@ static int s1_get(thread_timer_t *timer) {
     if(require_shared_lock()) // busy
         return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     int ret = -1;
+
     pthread_cleanup_push((void*)&release_shared_lock, NULL);
     while(1) {
-        int ch;
         md5((uint8_t*)timer->dat, strlen(timer->dat)+1, digest);
         uint8_t* dp = digest;
         int p = ((*((uint32_t*)digest))>>(8*sizeof(uint32_t)-DICTPOOLBIT))&DICTPOOLSZ;
-        if(!dict_pool[p]) break; // 无值
+        if(!dict_pool[p]) {
+            ret = send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4); // 无值
+            break;
+        }
 
         int c = 16-4;
         int notok = 1;
@@ -241,17 +244,23 @@ static int s1_get(thread_timer_t *timer) {
             ret = send_data(timer->accept_fd, timer->index, ACKSUCC, dict_pool[p]->data, last_nonnull(dict_pool[p]->data, DICTDATSZ));
             break;
         }
-        if(!dict_pool[p]) break; // 无值
+        if(!dict_pool[p]) {
+            ret = send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4); // 无值
+            break;
+        }
         #ifdef DEBUG
             printf("cannot find any empty slot for digest of %s: %08x, open dict to find it.\n", timer->dat, p);
         #endif
 
-        FILE *fp = open_dict(timer->index, 1); // really open
-        if(fp == NULL) {
-            ret = send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
-            break;
-        }
+        break;
+    }
+    pthread_cleanup_pop(1);
+    if(~ret) return ret;
 
+    FILE *fp = open_dict(timer->index, 1); // really open
+    if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    while(1) {
+        int ch;
         pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
         while(has_next(fp, ch)) {
             if(!ch) continue; // skip null bytes
@@ -264,10 +273,9 @@ static int s1_get(thread_timer_t *timer) {
             }
         }
         pthread_cleanup_pop(1);
-
         break;
     }
-    pthread_cleanup_pop(1);
+
     if(!~ret) return send_data(timer->accept_fd, timer->index, ACKNULL, "null", 4);
     return ret;
 }
