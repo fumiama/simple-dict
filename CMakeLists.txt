@@ -24,7 +24,7 @@ add_executable(cfgwriter cfgwriter.c)
 #add_executable(migratenew migratenew.c)
 
 target_link_libraries(simple-dict-server scrypto libspb.a pthread)
-target_link_libraries(simple-dict-client scrypto pthread)
+target_link_libraries(simple-dict-client scrypto libspb.a pthread)
 target_link_libraries(cfgwriter libspb.a)
 
 #target_link_libraries(migrate libspb.a)
