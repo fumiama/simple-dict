@@ -5,11 +5,11 @@
 #include "old_dict.h"
 
 DICTBLK dict;
-DICT d;
+dict_t d;
 
 int main(int argc, char** argv) {
     if(argc == 3) {
-        uint32_t* items_len = align_struct(sizeof(DICT), 2, d.key, d.data);
+        uint32_t* items_len = align_struct(sizeof(dict_t), 2, d.key, d.data);
         FILE* old = fopen(argv[1], "rb");
         FILE* new = fopen(argv[2], "wb");
         if(old && new) {
@@ -18,10 +18,10 @@ int main(int argc, char** argv) {
                 dict.key[ks] = 0;
                 uint8_t ds = dict.datasize;
                 dict.data[ds] = 0;
-                memset(&d, 0, sizeof(DICT));
+                memset(&d, 0, sizeof(dict_t));
                 memcpy(d.key, dict.key, ks);
                 memcpy(d.data, dict.data, ds);
-                set_pb(new, items_len, sizeof(DICT), &d);
+                set_pb(new, items_len, sizeof(dict_t), &d);
             }
             fclose(old);
             fclose(new);

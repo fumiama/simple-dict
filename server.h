@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define THREADCNT 16
-#define MAXWAITSEC 4
+#define THREADCNT  32
+#define MAXWAITSEC 8
 
 // DICTPOOLBIT must be lower than 4*8 = 32
 #define DICTPOOLBIT 16

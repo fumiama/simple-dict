@@ -106,7 +106,7 @@ static inline FILE* open_dict(uint32_t index, int isro) {
 }
 
 static inline int require_shared_lock() {
-    if(pthread_rwlock_tryrdlock(&mu)) {
+    if(pthread_rwlock_rdlock(&mu)) {
         perror("Open dict: Readlock busy");
         return 1;
     }

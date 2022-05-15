@@ -12,7 +12,9 @@
 #include <sys/stat.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <simple_protobuf.h>
 #include "crypto.h"
+#include "config.h"
 
 #if !__APPLE__
     #include <sys/sendfile.h> 
@@ -27,8 +29,7 @@ static struct sockaddr_in their_addr;
 static pthread_t thread;
 static uint32_t file_size;
 static int recv_bin = 0;
-static char pwd[64] = "fumiama";
-static char sps[64] = "minamoto";
+static config_t conf;
 
 void getMessage(void *p) {
     int c = 0, offset = 0;
@@ -68,7 +69,7 @@ void getMessage(void *p) {
                     //fwrite(data, datalen, 1, fp);
                     //fclose(fp);
                     off_t tmp = datalen;
-                    char* newdata = raw_decrypt(data, &tmp, 0, pwd);
+                    char* newdata = raw_decrypt(data, &tmp, 0, conf.pwd);
                     if(newdata) {
                         printf("raw data len after decode: %d\n", (int)tmp);
                         FILE* fp = fopen(savepath, "wb+");
@@ -102,7 +103,7 @@ void getMessage(void *p) {
             #ifdef DEBUG
                 printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
             #endif
-            if(cmdpacket_decrypt(cp, 0, pwd)) {
+            if(cmdpacket_decrypt(cp, 0, conf.pwd)) {
                 cp->data[cp->datalen] = 0;
                 #ifdef DEBUG
                     printf("[normal] Get %u bytes packet with data: %s\n", offset, cp->data);
@@ -138,14 +139,32 @@ void send_cmd(int accept_fd, cmdpacket_t p) {
     else puts("Send data succeed.");
 }
 
-int main(int argc,char *argv[]) {   //usage: ./client host port
+int main(int argc, char *argv[]) {   // usage: ./client cfg.sp host port
+    if(argc != 4) {
+        puts("usage: cfg.sp host port");
+        return 0;
+    }
+    FILE* fp = fopen(argv[1], "rb");
+    if(fp == NULL) {
+        fprintf(stderr, "Error opening config file: %s", argv[1]);
+        perror("fopen");
+        return 1;
+    }
+    uint8_t buf[8+sizeof(config_t)];
+    SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
+    if(!spb) {
+        fprintf(stderr, "Error reading config file: %s\n", argv[1]);
+        return 2;
+    }
+    conf = *(config_t*)(spb->target);
+    fclose(fp);
     ssize_t numbytes;
     puts("break!");
     while((sockfd = socket(AF_INET,SOCK_STREAM,0)) == -1);
     puts("Get sockfd");
     their_addr.sin_family = AF_INET;
-    their_addr.sin_port = htons(atoi(argv[2]));
-    their_addr.sin_addr.s_addr=inet_addr(argv[1]);
+    their_addr.sin_port = htons(atoi(argv[3]));
+    their_addr.sin_addr.s_addr=inet_addr(argv[2]);
     bzero(&(their_addr.sin_zero), 8);
     while(connect(sockfd,(struct sockaddr*)&their_addr,sizeof(struct sockaddr)) == -1);
     puts("Connected to server");
@@ -193,21 +212,21 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                     p->cmd = CMDSET;
                     p->datalen = strlen(buf+4);
                     memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, sps);
+                    cmdpacket_encrypt(p, 0, conf.sps);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "dat")) {
                     p->cmd = CMDDAT;
                     p->datalen = strlen(buf+4);
                     memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, sps);
+                    cmdpacket_encrypt(p, 0, conf.sps);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "get")) {
                     p->cmd = CMDGET;
                     p->datalen = strlen(buf+4);
                     memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, pwd);
+                    cmdpacket_encrypt(p, 0, conf.pwd);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "cat")) {
@@ -215,14 +234,14 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                     p->datalen = 4;
                     memcpy(p->data, "fill", p->datalen);
                     recv_bin = 1;
-                    cmdpacket_encrypt(p, 0, pwd);
+                    cmdpacket_encrypt(p, 0, conf.pwd);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "del")) {
                     p->cmd = CMDDEL;
                     p->datalen = strlen(buf+4);
                     memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, sps);
+                    cmdpacket_encrypt(p, 0, conf.sps);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "md5")) {
@@ -234,7 +253,7 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                         printf("Read md5:");
                         for(int i = 0; i < 16; i++) printf("%02x", (uint8_t)(p->data[i]));
                         putchar('\n');
-                        cmdpacket_encrypt(p, 0, pwd);
+                        cmdpacket_encrypt(p, 0, conf.pwd);
                         send_cmd(sockfd, p);
                         free(p);
                     }
@@ -242,7 +261,7 @@ int main(int argc,char *argv[]) {   //usage: ./client host port
                     p->cmd = CMDEND;
                     p->datalen = 4;
                     memcpy(p->data, "fill", p->datalen);
-                    cmdpacket_encrypt(p, 0, pwd);
+                    cmdpacket_encrypt(p, 0, conf.pwd);
                     send_cmd(sockfd, p);
                     free(p);
                     exit(EXIT_SUCCESS);

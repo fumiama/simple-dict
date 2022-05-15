@@ -46,7 +46,7 @@ static thread_timer_t timers[THREADCNT];
 
 static dict_t setdicts[THREADCNT];
 static uint32_t* items_len;
-static CONFIG cfg;
+static config_t cfg;
 static pthread_attr_t attr;
 
 #define DICTPOOLSZ (((uint32_t)-1)>>((sizeof(uint32_t)*8-DICTPOOLBIT)))
@@ -827,13 +827,13 @@ int main(int argc, char *argv[]) {
         return 7;
     }
     if(~((int)fp)) {
-        uint8_t buf[8+sizeof(CONFIG)];
+        uint8_t buf[8+sizeof(config_t)];
         SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
         if(!spb) {
             fprintf(stderr, "Error reading config file: %s\n", argv[as_daemon?4:3]);
             return 8;
         }
-        cfg = *(CONFIG*)(spb->target);
+        cfg = *(config_t*)(spb->target);
         fclose(fp);
     }
     items_len = align_struct(sizeof(dict_t), 2, setdicts[0].key, setdicts[0].data);
