@@ -31,6 +31,8 @@ static uint32_t file_size;
 static int recv_bin = 0;
 static config_t conf;
 
+#define DEBUG
+
 void getMessage(void *p) {
     int c = 0, offset = 0;
     cmdpacket_t cp = (cmdpacket_t)bufr;
@@ -55,31 +57,36 @@ void getMessage(void *p) {
                 #ifdef DEBUG
                     printf("raw data len: %d\n", datalen);
                 #endif
-                char* data = malloc(datalen);
-                offset = c - ++i;
-                if(offset > 0) {
-                    memcpy(data, bufr+i, offset);
-                    #ifdef DEBUG
-                        printf("copy %d bytes data that had been received.\n", offset);
-                    #endif
+                if(datalen == 0) {
+                    puts("raw data is empty, truncate file.");
+                    fclose(fopen(savepath, "wb+"));
+                } else {
+                    char* data = malloc(datalen);
+                    offset = c - ++i;
+                    if(offset > 0) {
+                        memcpy(data, bufr+i, offset);
+                        #ifdef DEBUG
+                            printf("copy %d bytes data that had been received.\n", offset);
+                        #endif
+                    }
+                    else offset = 0;
+                    if(datalen-offset == recv(sockfd, data+offset, datalen-offset, MSG_WAITALL)) {
+                        //FILE* fp = fopen("raw_before_dec", "wb+");
+                        //fwrite(data, datalen, 1, fp);
+                        //fclose(fp);
+                        off_t tmp = datalen;
+                        char* newdata = raw_decrypt(data, &tmp, 0, conf.pwd);
+                        if(newdata) {
+                            printf("raw data len after decode: %d\n", (int)tmp);
+                            FILE* fp = fopen(savepath, "wb+");
+                            fwrite(newdata, (size_t)tmp, 1, fp);
+                            fclose(fp);
+                            free(newdata);
+                            puts("recv raw data succeed.");
+                        } else puts("decode raw data error.");
+                    } else puts("recv raw data error.");
+                    free(data);
                 }
-                else offset = 0;
-                if(datalen-offset == recv(sockfd, data+offset, datalen-offset, MSG_WAITALL)) {
-                    //FILE* fp = fopen("raw_before_dec", "wb+");
-                    //fwrite(data, datalen, 1, fp);
-                    //fclose(fp);
-                    off_t tmp = datalen;
-                    char* newdata = raw_decrypt(data, &tmp, 0, conf.pwd);
-                    if(newdata) {
-                        printf("raw data len after decode: %d\n", (int)tmp);
-                        FILE* fp = fopen(savepath, "wb+");
-                        fwrite(newdata, (size_t)tmp, 1, fp);
-                        fclose(fp);
-                        free(newdata);
-                        puts("recv raw data succeed.");
-                    } else puts("decode raw data error.");
-                } else puts("recv raw data error.");
-                free(data);
                 recv_bin = offset =  0;
             }
         } else {
@@ -210,37 +217,32 @@ int main(int argc, char *argv[]) {   // usage: ./client cfg.sp host port
                 if(!strcmp(buf, "set")) {
                     p->cmd = CMDSET;
                     p->datalen = strlen(buf+4);
-                    memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, conf.sps);
+                    cmdpacket_encrypt(p, 0, conf.sps, buf+4);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "dat")) {
                     p->cmd = CMDDAT;
                     p->datalen = strlen(buf+4);
-                    memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, conf.sps);
+                    cmdpacket_encrypt(p, 0, conf.sps, buf+4);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "get")) {
                     p->cmd = CMDGET;
                     p->datalen = strlen(buf+4);
-                    memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, conf.pwd);
+                    cmdpacket_encrypt(p, 0, conf.pwd, (const char *)&buf+4);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "cat")) {
                     p->cmd = CMDCAT;
                     p->datalen = 4;
-                    memcpy(p->data, "fill", p->datalen);
                     recv_bin = 1;
-                    cmdpacket_encrypt(p, 0, conf.pwd);
+                    cmdpacket_encrypt(p, 0, conf.pwd, (const char *)&"fill");
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "del")) {
                     p->cmd = CMDDEL;
                     p->datalen = strlen(buf+4);
-                    memcpy(p->data, buf+4, p->datalen);
-                    cmdpacket_encrypt(p, 0, conf.sps);
+                    cmdpacket_encrypt(p, 0, conf.sps, buf+4);
                     send_cmd(sockfd, p);
                     free(p);
                 } else if(!strcmp(buf, "md5")) {
@@ -252,15 +254,14 @@ int main(int argc, char *argv[]) {   // usage: ./client cfg.sp host port
                         printf("Read md5:");
                         for(int i = 0; i < 16; i++) printf("%02x", (uint8_t)(p->data[i]));
                         putchar('\n');
-                        cmdpacket_encrypt(p, 0, conf.pwd);
+                        cmdpacket_encrypt(p, 0, conf.pwd, (const char *)&p->data);
                         send_cmd(sockfd, p);
                         free(p);
                     }
                 } else if(!strcmp(buf, "end")) {
                     p->cmd = CMDEND;
                     p->datalen = 4;
-                    memcpy(p->data, "fill", p->datalen);
-                    cmdpacket_encrypt(p, 0, conf.pwd);
+                    cmdpacket_encrypt(p, 0, conf.pwd, (const char *)&"fill");
                     send_cmd(sockfd, p);
                     free(p);
                     exit(EXIT_SUCCESS);

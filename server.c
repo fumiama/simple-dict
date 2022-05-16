@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -125,8 +126,7 @@ static int send_data(int accept_fd, int index, server_ack_t cmd, const char *dat
     cmdpacket_t p = (cmdpacket_t)buf;
     p->cmd = (uint8_t)cmd;
     p->datalen = length;
-    memcpy(p->data, data, p->datalen);
-    cmdpacket_encrypt(p, index, cfg.pwd);
+    cmdpacket_encrypt(p, index, cfg.pwd, data);
     int total = CMDPACKET_HEAD_LEN+p->datalen;
     if(!~send(accept_fd, buf, total, 0)) {
         perror("Send data error");
@@ -145,8 +145,18 @@ static int send_all(thread_timer_t *timer) {
     if(fp == NULL) return 1;
     pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
     off_t len = 0, file_size = get_dict_size();
-    char* buf = (char*)malloc(file_size);
-    if(buf) {
+
+    while(1) {
+        if(file_size <= 0) {
+            re = send(timer->accept_fd, "0$0123456789abcdef", CMDPACKET_HEAD_LEN, 0);
+            puts("Send 0 bytes.");
+            break;
+        }
+        char* buf = (char*)malloc(file_size);
+        if(!buf) {
+            perror("malloc");
+            break;
+        }
         pthread_cleanup_push((void*)&free, (void*)buf);
         if(fread(buf, file_size, 1, fp) == 1) {
             #ifdef DEBUG
@@ -154,19 +164,16 @@ static int send_all(thread_timer_t *timer) {
             #endif
             char* encbuf = raw_encrypt(buf, &file_size, timer->index, cfg.pwd);
             sprintf(timer->dat, "%u$", (unsigned int)file_size);
-            //printf("Get encrypted file size: %s\n", timer->dat);
-            //FILE* fp = fopen("raw_after_enc", "wb+");
-            //fwrite(encbuf, file_size, 1, fp);
-            //fclose(fp);
             pthread_cleanup_push((void*)&free, (void*)encbuf);
-            if(send(timer->accept_fd, timer->dat, strlen(timer->dat), 0) > 0) {
-                re = send(timer->accept_fd, encbuf, file_size, 0);
-                printf("Send %u bytes.\n", re);
-            } else re = 0;
+            struct iovec iov[2] = {{timer->dat, strlen(timer->dat)}, {encbuf, file_size}};
+            re = writev(timer->accept_fd, (const struct iovec *)&iov, 2);
+            printf("Send %d bytes.\n", re);
             pthread_cleanup_pop(1);
         }
         pthread_cleanup_pop(1);
+        break;
     }
+
     pthread_cleanup_pop(1);
     return re;
 }

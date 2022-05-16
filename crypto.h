@@ -93,13 +93,13 @@ static char* raw_decrypt(const char* buf, off_t* len, int index, const char pwd[
     return decbuf;
 }
 
-static void cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64]) {
-    TEADAT tin = {p->datalen, p->data};
+static void cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64], const char* data) {
+    TEADAT tin = {p->datalen, (uint8_t *)data};
     TEADAT tout;
     TEA tea[4];
     #ifdef DEBUG
         printf("encrypt len: %d, data: ", p->datalen);
-        for(int i = 0; i < p->datalen; i++) printf("%02x", p->data[i]);
+        for(int i = 0; i < p->datalen; i++) printf("%02x", data[i]);
         putchar('\n');
     #endif
 
@@ -115,7 +115,7 @@ static void cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64]) {
 
     tea_encrypt_native_endian(tea, sumtable, &tin, &tout);
 
-    md5(p->data, p->datalen, p->md5);
+    md5((const uint8_t *)data, p->datalen, p->md5);
     #ifdef DEBUG
         printf("encrypt md5: ");
         for(int i = 0; i < 16; i++) printf("%02x", p->md5[i]);
