@@ -557,7 +557,6 @@ static void handle_segv(int signo) {
 static void accept_timer(void *p) {
     thread_timer_t *timer = timer_pointer_of(p);
     uint32_t index = timer->index;
-    pthread_t thread = timer->thread;
     sigset_t mask;
 
     sigemptyset(&mask);
@@ -565,13 +564,16 @@ static void accept_timer(void *p) {
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
 
     sleep(MAXWAITSEC / 4);
-    while(!pthread_kill(thread, 0)) {
+    while(timer->thread && !pthread_kill(timer->thread, 0)) {
         if(is_dict_opening) touch_timer(p);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
         if(waitsec > MAXWAITSEC) {
-            pthread_kill(thread, SIGQUIT);
-            puts("Kill thread");
+            pthread_t thread = timer->thread;
+            if(thread) {
+                pthread_kill(thread, SIGQUIT);
+                puts("Kill thread");
+            }
             break;
         }
         sleep(MAXWAITSEC / 4);
@@ -584,14 +586,14 @@ static void cleanup_thread(thread_timer_t* timer) {
     sigaddset(&mask, SIGPIPE); // 防止处理嵌套
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
     puts("Start cleaning");
-    timer->thread = 0;
-    setdicts[timer->index].data[0] = 0;
     if(timer->accept_fd) {
         close(timer->accept_fd);
         timer->accept_fd = 0;
         puts("Close accept");
     }
     close_dict(timer->index);
+    timer->thread = 0;
+    setdicts[timer->index].data[0] = 0;
     puts("Finish cleaning");
 }
 
