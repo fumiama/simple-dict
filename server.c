@@ -564,17 +564,17 @@ static void accept_timer(void *p) {
     sigaddset(&mask, SIGPIPE); // 防止处理嵌套
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
 
+    sleep(MAXWAITSEC / 4);
     while(!pthread_kill(thread, 0)) {
-        sleep(MAXWAITSEC / 4);
         if(is_dict_opening) touch_timer(p);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
-        if(pthread_kill(thread, 0)) break;
         if(waitsec > MAXWAITSEC) {
             pthread_kill(thread, SIGQUIT);
             puts("Kill thread");
             break;
         }
+        sleep(MAXWAITSEC / 4);
     }
 }
 
