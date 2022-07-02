@@ -569,6 +569,7 @@ static void accept_timer(void *p) {
         if(is_dict_opening) touch_timer(p);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
+        if(pthread_kill(thread, 0)) break;
         if(waitsec > MAXWAITSEC) {
             pthread_kill(thread, SIGQUIT);
             puts("Kill thread");
