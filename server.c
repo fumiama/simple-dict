@@ -39,6 +39,7 @@ struct thread_timer_t {
     ssize_t numbytes;
     char *dat;
     pthread_t thread;
+    pthread_t timerthread;
     pthread_cond_t c;
     pthread_mutex_t mc;
     pthread_rwlock_t mb;
@@ -560,6 +561,10 @@ static void handle_quit(int signo) {
 
 static void handle_segv(int signo) {
     puts("Handle kill/segv/term");
+    for(int i = 0; i < THREADCNT; i++) {
+        if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
+        if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
+    }
     fflush(stdout);
     pthread_exit(NULL);
 }
@@ -617,8 +622,6 @@ static void cleanup_thread(thread_timer_t* timer) {
     pthread_cond_destroy(&timer->c);
     pthread_mutex_destroy(&timer->mc);
     pthread_rwlock_destroy(&timer->mb);
-    pthread_cond_destroy(&timer->tc);
-    pthread_mutex_destroy(&timer->tmc);
     setdicts[timer->index].data[0] = 0;
     puts("Finish cleaning");
 }
@@ -627,7 +630,9 @@ static void handle_int(int signo) {
     puts("Keyboard interrupted");
     for(int i = 0; i < THREADCNT; i++) {
         if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
+        if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
     }
+    fflush(stdout);
     pthread_exit(NULL);
 }
 
@@ -640,17 +645,24 @@ static void handle_accept(void *p) {
     pthread_cond_init(&timer_pointer_of(p)->c, NULL);
     pthread_mutex_init(&timer_pointer_of(p)->mc, NULL);
     pthread_rwlock_init(&timer_pointer_of(p)->mb, NULL);
-    pthread_cond_init(&timer_pointer_of(p)->tc, NULL);
-    pthread_mutex_init(&timer_pointer_of(p)->tmc, NULL);
+    pthread_t thread = timer_pointer_of(p)->timerthread;
+    if(!thread || pthread_kill(thread, 0)) {
+        pthread_cond_init(&timer_pointer_of(p)->tc, NULL);
+        pthread_mutex_init(&timer_pointer_of(p)->tmc, NULL);
+        if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
+            perror("Error creating timer thread");
+            cleanup_thread(timer_pointer_of(p));
+            pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
+            return;
+        }
+        timer_pointer_of(p)->timerthread = thread;
+    } else {
+        pthread_mutex_lock(&timer_pointer_of(p)->tmc);
+        pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
+        pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
+    }
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
-    pthread_t thread;
-    if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
-        perror("Error creating timer thread");
-        //cleanup_thread(timer_pointer_of(p));
-        pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
-        return;
-    }
     while(1) {
         puts("Creating timer thread succeeded");
         int accept_fd = timer_pointer_of(p)->accept_fd;
@@ -757,7 +769,6 @@ static void handle_accept(void *p) {
             pthread_mutex_lock(&timer_pointer_of(p)->tmc);
             pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
             pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
-            puts("Wakeup timer");
         }
     }
     pthread_cleanup_pop(1);
