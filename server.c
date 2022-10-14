@@ -661,15 +661,16 @@ static void handle_accept(void *p) {
             return;
         }
         timer_pointer_of(p)->timerthread = thread;
+        puts("Creating timer thread succeeded");
     } else {
         pthread_mutex_lock(&timer_pointer_of(p)->tmc);
         pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
         pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
+        puts("Waking up timer thread succeeded");
     }
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
     while(1) {
-        puts("Creating timer thread succeeded");
         int accept_fd = timer_pointer_of(p)->accept_fd;
         uint32_t index = timer_pointer_of(p)->index;
         uint8_t *buff = timer_pointer_of(p)->buf;
