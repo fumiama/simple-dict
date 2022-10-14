@@ -68,6 +68,7 @@ static void cleanup_thread(thread_timer_t* timer);
 static server_ack_t del(FILE *fp, const char* key, int len, char ret[4]);
 static void handle_accept(void *accept_fd_p);
 static void handle_int(int signo);
+static void handle_kill(int signo);
 static void handle_pipe(int signo);
 static void handle_quit(int signo);
 static void handle_segv(int signo);
@@ -560,7 +561,12 @@ static void handle_quit(int signo) {
 }
 
 static void handle_segv(int signo) {
-    puts("Handle kill/segv/term");
+    puts("Handle segv");
+    pthread_exit(NULL);
+}
+
+static void handle_kill(int signo) {
+    puts("Handle kill/term");
     for(int i = 0; i < THREADCNT; i++) {
         if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
         if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
@@ -652,7 +658,6 @@ static void handle_accept(void *p) {
         if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
             perror("Error creating timer thread");
             cleanup_thread(timer_pointer_of(p));
-            pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
             return;
         }
         timer_pointer_of(p)->timerthread = thread;
@@ -787,10 +792,10 @@ static void accept_client(int fd) {
     }*/
     signal(SIGINT,  handle_int);
     signal(SIGQUIT, handle_quit);
-    signal(SIGKILL, handle_segv);
+    signal(SIGKILL, handle_kill);
     signal(SIGSEGV, handle_segv);
     signal(SIGPIPE, handle_pipe);
-    signal(SIGTERM, handle_segv);
+    signal(SIGTERM, handle_kill);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
