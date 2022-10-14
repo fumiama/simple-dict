@@ -31,8 +31,6 @@ static uint32_t file_size;
 static int recv_bin = 0;
 static config_t conf;
 
-#define DEBUG
-
 void getMessage(void *p) {
     int c = 0, offset = 0;
     cmdpacket_t cp = (cmdpacket_t)bufr;
@@ -75,13 +73,14 @@ void getMessage(void *p) {
                         //fwrite(data, datalen, 1, fp);
                         //fclose(fp);
                         off_t tmp = datalen;
-                        char* newdata = raw_decrypt(data, &tmp, 0, conf.pwd);
+                        char* ptr;
+                        char* newdata = raw_decrypt(data, &tmp, 0, conf.pwd, &ptr);
                         if(newdata) {
                             printf("raw data len after decode: %d\n", (int)tmp);
                             FILE* fp = fopen(savepath, "wb+");
                             fwrite(newdata, (size_t)tmp, 1, fp);
                             fclose(fp);
-                            free(newdata);
+                            free(ptr);
                             puts("recv raw data succeed.");
                         } else puts("decode raw data error.");
                     } else puts("recv raw data error.");
@@ -110,7 +109,7 @@ void getMessage(void *p) {
             #ifdef DEBUG
                 printf("[handle] Decrypt %d bytes data...\n", (int)cp->datalen);
             #endif
-            if(cmdpacket_decrypt(cp, 0, conf.pwd)) {
+            if(!cmdpacket_decrypt(cp, 0, conf.pwd)) {
                 cp->data[cp->datalen] = 0;
                 #ifdef DEBUG
                     printf("[normal] Get %u bytes packet with data: %s\n", offset, cp->data);

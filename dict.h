@@ -11,8 +11,13 @@
 #include "dict.h"
 #include "server.h"
 
-#define DICTKEYSZ 127
-#define DICTDATSZ 127
+#ifndef DICTKEYSZ
+    #define DICTKEYSZ 127
+#endif
+#ifndef DICTDATSZ
+    #define DICTDATSZ 127
+#endif
+
 struct dict_t {
     char key[DICTKEYSZ];
     char data[DICTDATSZ];

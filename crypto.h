@@ -11,25 +11,29 @@
 #include <time.h>
 #include "crypto.h"
 
+#ifndef CRYPTO_SUMTABLE
+#define CRYPTO_SUMTABLE {\
+	0x9e3579b9,\
+	0x3c6ef172,\
+	0xd2a66d2b,\
+	0x78dd36e4,\
+	0x17e5609d,\
+	0xb54fda56,\
+	0x5384560f,\
+	0xf1bb77c8,\
+	0x8ff24781,\
+	0x2e4ac13a,\
+	0xcc653af3,\
+	0x6a9964ac,\
+	0x08d12965,\
+	0xa708081e,\
+	0x451221d7,\
+	0xe37793d0 \
+}
+#endif
+
 // TEA encoding sumtable
-static const uint32_t sumtable[0x10] = {
-	0x9e3579b9,
-	0x3c6ef172,
-	0xd2a66d2b,
-	0x78dd36e4,
-	0x17e5609d,
-	0xb54fda56,
-	0x5384560f,
-	0xf1bb77c8,
-	0x8ff24781,
-	0x2e4ac13a,
-	0xcc653af3,
-	0x6a9964ac,
-	0x08d12965,
-	0xa708081e,
-	0x451221d7,
-	0xe37793d0,
-};
+static const uint32_t sumtable[0x10] = CRYPTO_SUMTABLE;
 
 static uint8_t seqs[THREADCNT]; // 消息序号
 
@@ -54,66 +58,64 @@ static void reset_seq(int index) {
 }
 
 static char* raw_encrypt(const char* buf, off_t* len, int index, const char pwd[64]) {
-    TEADAT tin = {*len, (uint8_t*)buf};
-    TEADAT tout;
-    TEA tea[4];
+    TEA tea;
 
-    ((uint64_t*)tea)[0] = ((uint64_t*)pwd)[0];
-    ((uint64_t*)tea)[1] = ((uint64_t*)pwd)[1];
-    ((uint8_t*)tea)[15] = seqs[index]++;
-    tea_encrypt_native_endian(tea, sumtable, &tin, &tout);
+    ((uint64_t*)tea.t)[0] = ((uint64_t*)pwd)[0];
+    ((uint64_t*)tea.t)[1] = ((uint64_t*)pwd)[1];
+    ((uint8_t*)tea.t)[15] = seqs[index]++;
 
-    *len = tout.len;
-    char* encbuf = (char*)malloc(*len);
-    memcpy(encbuf, tout.data, *len);
-    free(tout.ptr);
-
+    int64_t dstlen = tea_encrypt_len(*len);
+    char* encbuf = (char*)malloc(dstlen);
+    if(!encbuf) return NULL;
+    *len = tea_encrypt_native_endian(tea, sumtable, (const uint8_t*)buf, *len, (uint8_t*)encbuf);
     return encbuf;
 }
 
-static char* raw_decrypt(const char* buf, off_t* len, int index, const char pwd[64]) {
-    TEADAT tin = {*len, (uint8_t*)buf};
-    TEADAT tout;
-    TEA tea[4];
+// raw_decrypt buf: in->src out->dstptr
+static char* raw_decrypt(const char* buf, off_t* len, int index, const char pwd[64], char** ptr) {
+    TEA tea;
 
-    ((uint64_t*)tea)[0] = ((uint64_t*)pwd)[0];
-    ((uint64_t*)tea)[1] = ((uint64_t*)pwd)[1];
-    ((uint8_t*)tea)[15] = seqs[index];
-    if(!tea_decrypt_native_endian(tea, sumtable, &tin, &tout)) return NULL;
-    else if(tout.len <= 0) {
-        free(tout.ptr);
-        return NULL;
-    } else seqs[index]++;
+    ((uint64_t*)tea.t)[0] = ((uint64_t*)pwd)[0];
+    ((uint64_t*)tea.t)[1] = ((uint64_t*)pwd)[1];
+    ((uint8_t*)tea.t)[15] = seqs[index];
 
-    *len = tout.len;
     char* decbuf = (char*)malloc(*len);
-    memcpy(decbuf, tout.data, *len);
-    free(tout.ptr);
+    if(!decbuf) return NULL;
+    char* out = (char*)tea_decrypt_native_endian(tea, sumtable, (const uint8_t*)buf, *len, (uint8_t*)decbuf);
+    if(!out) {
+        free(decbuf);
+        return NULL;
+    }
 
-    return decbuf;
+    seqs[index]++;
+
+    *len = tea_decrypt_len(*len, decbuf[0]);
+    *ptr = decbuf;
+
+    return out;
 }
 
-static void cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64], const char* data) {
-    TEADAT tin = {p->datalen, (uint8_t *)data};
-    TEADAT tout;
-    TEA tea[4];
+static int cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64], const char* data) {
+    TEA tea;
     #ifdef DEBUG
         printf("encrypt len: %d, data: ", p->datalen);
         for(int i = 0; i < p->datalen; i++) printf("%02x", data[i]);
         putchar('\n');
     #endif
 
-    ((uint64_t*)tea)[0] = ((uint64_t*)pwd)[0];
-    ((uint64_t*)tea)[1] = ((uint64_t*)pwd)[1];
-    ((uint8_t*)tea)[15] = seqs[index]++;
+    ((uint64_t*)tea.t)[0] = ((uint64_t*)pwd)[0];
+    ((uint64_t*)tea.t)[1] = ((uint64_t*)pwd)[1];
+    ((uint8_t*)tea.t)[15] = seqs[index]++;
 
     #ifdef DEBUG
         printf("encrypt tea: ");
-        for(int i = 0; i < 16; i++) printf("%02x", ((uint8_t*)tea)[i]);
+        for(int i = 0; i < 16; i++) printf("%02x", ((uint8_t*)tea.t)[i]);
         putchar('\n');
     #endif
 
-    tea_encrypt_native_endian(tea, sumtable, &tin, &tout);
+    int64_t outlen = tea_encrypt_len(p->datalen);
+
+    char out[outlen];
 
     md5((const uint8_t *)data, p->datalen, p->md5);
     #ifdef DEBUG
@@ -122,63 +124,62 @@ static void cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64], cons
         putchar('\n');
     #endif
 
-    p->datalen = tout.len;
-    memcpy(p->data, tout.data, p->datalen);
+    p->datalen = tea_encrypt_native_endian(tea, sumtable, (const uint8_t*)data, p->datalen, (uint8_t*)out);
+    memcpy(p->data, out, p->datalen);
+
     #ifdef DEBUG
         printf("encrypted data len: %d, data: ", p->datalen);
         for(int i = 0; i < p->datalen; i++) printf("%02x", p->data[i]);
         putchar('\n');
     #endif
-    free(tout.ptr);
 
-    return;
+    return 0;
 }
 
 static int cmdpacket_decrypt(cmdpacket_t p, int index, const char pwd[64]) {
-    TEADAT tin = {p->datalen, p->data};
-    TEADAT tout;
-    TEA tea[4];
+    TEA tea;
     #ifdef DEBUG
         printf("decrypt len: %d, data: ", p->datalen);
         for(int i = 0; i < p->datalen; i++) printf("%02x", p->data[i]);
         putchar('\n');
     #endif
 
-    ((uint64_t*)tea)[0] = ((uint64_t*)pwd)[0];
-    ((uint64_t*)tea)[1] = ((uint64_t*)pwd)[1];
-    ((uint8_t*)tea)[15] = seqs[index];
+    ((uint64_t*)tea.t)[0] = ((uint64_t*)pwd)[0];
+    ((uint64_t*)tea.t)[1] = ((uint64_t*)pwd)[1];
+    ((uint8_t*)tea.t)[15] = seqs[index];
 
     #ifdef DEBUG
         printf("decrypt tea: ");
-        for(int i = 0; i < 16; i++) printf("%02x", ((uint8_t*)tea)[i]);
+        for(int i = 0; i < 16; i++) printf("%02x", ((uint8_t*)tea.t)[i]);
         putchar('\n');
     #endif
 
-    if(!tea_decrypt_native_endian(tea, sumtable, &tin, &tout)) return 0;
-    if(tout.len <= 0) {
-        free(tout.ptr);
-        return 0;
-    }
+    char outbuf[p->datalen];
+
+    char* out = (char*)tea_decrypt_native_endian(tea, sumtable, (const uint8_t*)p->data, p->datalen, (uint8_t*)outbuf);
+    if(!out) return 2;
+
+    p->datalen = tea_decrypt_len(p->datalen, outbuf[0]);
+
     uint8_t datamd5[16];
-    md5(tout.data, tout.len, datamd5);
+    md5((const uint8_t*)out, p->datalen, datamd5);
+
     #ifdef DEBUG
         printf("decrypt md5: ");
         for(int i = 0; i < 16; i++) printf("%02x", datamd5[i]);
         putchar('\n');
-        printf("decrypted data len: %u, data: ", (unsigned int)tout.len);
-        for(int i = 0; i < tout.len; i++) printf("%02x", tout.data[i]);
+        printf("decrypted data len: %u, data: ", (unsigned int)p->datalen);
+        for(int i = 0; i < p->datalen; i++) printf("%02x", out[i]);
         putchar('\n');
     #endif
+
     if(is_md5_equal((uint8_t*)datamd5, p->md5)) {
         seqs[index]++;
-        p->datalen = tout.len;
-        memcpy(p->data, tout.data, p->datalen);
-        free(tout.ptr);
-        return 1;
+        memcpy(p->data, out, p->datalen);
+        return 0;
     }
-    free(tout.ptr);
-    return 0;
-}
 
+    return 3;
+}
 
 #endif /* _CRYPTO_H_ */
