@@ -42,6 +42,8 @@ struct thread_timer_t {
     pthread_cond_t c;
     pthread_mutex_t mc;
     pthread_rwlock_t mb;
+    pthread_cond_t tc;
+    pthread_mutex_t tmc;
     uint8_t isbusy;
     uint8_t buf[CMDPACKET_LEN_MAX];
 };
@@ -576,7 +578,13 @@ static void accept_timer(void *p) {
         pthread_rwlock_rdlock(&timer->mb);
         uint8_t isbusy = timer->isbusy;
         pthread_rwlock_unlock(&timer->mb);
-        if(!isbusy) break;
+        if(!isbusy) {
+            pthread_mutex_lock(&timer->tmc);
+            puts("Timer sleep");
+            pthread_cond_wait(&timer->tc, &timer->tmc);
+            pthread_mutex_unlock(&timer->tmc);
+            puts("Timer woke up");
+        }
         if(is_dict_opening) touch_timer(p);
         time_t waitsec = time(NULL) - timer->touch;
         printf("Wait sec: %u, max: %u\n", (unsigned int)waitsec, MAXWAITSEC);
@@ -609,6 +617,8 @@ static void cleanup_thread(thread_timer_t* timer) {
     pthread_cond_destroy(&timer->c);
     pthread_mutex_destroy(&timer->mc);
     pthread_rwlock_destroy(&timer->mb);
+    pthread_cond_destroy(&timer->tc);
+    pthread_mutex_destroy(&timer->tmc);
     setdicts[timer->index].data[0] = 0;
     puts("Finish cleaning");
 }
@@ -630,20 +640,18 @@ static void handle_accept(void *p) {
     pthread_cond_init(&timer_pointer_of(p)->c, NULL);
     pthread_mutex_init(&timer_pointer_of(p)->mc, NULL);
     pthread_rwlock_init(&timer_pointer_of(p)->mb, NULL);
+    pthread_cond_init(&timer_pointer_of(p)->tc, NULL);
+    pthread_mutex_init(&timer_pointer_of(p)->tmc, NULL);
     pthread_cleanup_push((void*)&cleanup_thread, p);
+    puts("Handling accept...");
+    pthread_t thread;
+    if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
+        perror("Error creating timer thread");
+        //cleanup_thread(timer_pointer_of(p));
+        pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
+        return;
+    }
     while(1) {
-        puts("Handling accept...");
-        pthread_t thread;
-        pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
-        pthread_rwlock_wrlock(&timer_pointer_of(p)->mb);
-        timer_pointer_of(p)->isbusy = 1;
-        pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
-        if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
-            perror("Error creating timer thread");
-            //cleanup_thread(timer_pointer_of(p));
-            pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
-            return;
-        }
         puts("Creating timer thread succeeded");
         int accept_fd = timer_pointer_of(p)->accept_fd;
         uint32_t index = timer_pointer_of(p)->index;
@@ -741,9 +749,16 @@ static void handle_accept(void *p) {
         timer_pointer_of(p)->isbusy = 0;
         pthread_mutex_lock(&timer_pointer_of(p)->mc);
         pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
+        puts("Set thread status to idle");
         pthread_cond_wait(&timer_pointer_of(p)->c, &timer_pointer_of(p)->mc);
         pthread_mutex_unlock(&timer_pointer_of(p)->mc);
         puts("Thread wakeup");
+        if(!pthread_kill(thread, 0)) {
+            pthread_mutex_lock(&timer_pointer_of(p)->tmc);
+            pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
+            pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
+            puts("Wakeup timer");
+        }
     }
     pthread_cleanup_pop(1);
 }
@@ -810,6 +825,11 @@ static void accept_client(int fd) {
         timer->index = p;
         timer->touch = time(NULL);
         reset_seq(p);
+        pthread_rwlock_unlock(&timer->mb);
+        pthread_rwlock_wrlock(&timer->mb);
+        timer->isbusy = 1;
+        pthread_rwlock_unlock(&timer->mb);
+        puts("Set thread status to busy");
         if(timer->thread) {
             pthread_mutex_lock(&timer->mc);
             pthread_cond_signal(&timer->c); // wakeup thread
@@ -818,7 +838,6 @@ static void accept_client(int fd) {
         } else if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
             perror("Error creating thread");
             cleanup_thread(timer);
-            pthread_rwlock_unlock(&timer->mb);
             continue;
         } else puts("Creating thread succeeded");
     }
