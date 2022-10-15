@@ -864,8 +864,8 @@ static void accept_client(int fd) {
             pthread_mutex_unlock(&timer->mc);
             puts("Pick thread from pool");
         } else {
-            pthread_cond_init(&timer_pointer_of(p)->c, NULL);
-            pthread_mutex_init(&timer_pointer_of(p)->mc, NULL);
+            pthread_cond_init(&timer->c, NULL);
+            pthread_mutex_init(&timer->mc, NULL);
             if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
                 perror("Error creating thread");
                 cleanup_thread(timer);
