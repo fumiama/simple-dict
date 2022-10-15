@@ -97,6 +97,11 @@ static int bind_server(uint16_t* port) {
         bzero(&(server_addr.sin_zero), 8);
         int fd = socket(AF_INET, SOCK_STREAM, 0);
     #endif
+    int on = 1;
+    if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
+        perror("Set socket option failure");
+        return 0;
+    }
     if(!~bind(fd, (struct sockaddr *)&server_addr, struct_len)) {
         perror("Bind server failure");
         return 0;
