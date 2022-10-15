@@ -76,6 +76,7 @@ static void init_dict_pool(FILE *fp);
 static int insert_item(FILE *fp, const dict_t* dict, int keysize, int datasize);
 static inline uint32_t last_nonnull(const char* p, uint32_t max_size);
 static int listen_socket(int fd);
+static void process_defer();
 static int send_all(thread_timer_t *timer);
 static int send_data(int accept_fd, int index, server_ack_t cmd, const char *data, size_t length);
 static int s1_get(thread_timer_t *timer);
@@ -574,14 +575,7 @@ static void handle_segv(int signo) {
 
 static void handle_kill(int signo) {
     puts("Handle sigkill/sigterm");
-    for(int i = 0; i < THREADCNT; i++) {
-        if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
-        pthread_cond_destroy(&timers[i].tc);
-        pthread_mutex_destroy(&timers[i].tmc);
-        if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
-    }
-    fflush(stdout);
-    pthread_exit(NULL);
+    process_defer();
 }
 
 static void accept_timer(void *p) {
@@ -634,16 +628,18 @@ static void cleanup_thread(thread_timer_t* timer) {
     close_dict(timer->index);
     timer->thread = 0;
     pthread_cond_destroy(&timer->c);
+    puts("Destroy accept cond");
     pthread_mutex_destroy(&timer->mc);
+    puts("Destroy accept mutex");
     setdicts[timer->index].data[0] = 0;
     pthread_rwlock_wrlock(&timer->mb);
     timer->isbusy = 0;
+    puts("Clear busy");
     pthread_rwlock_unlock(&timer->mb);
     puts("Finish cleaning");
 }
 
-static void handle_int(int signo) {
-    puts("Keyboard interrupted");
+static void process_defer() {
     for(int i = 0; i < THREADCNT; i++) {
         if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
         pthread_cond_destroy(&timers[i].tc);
@@ -652,6 +648,11 @@ static void handle_int(int signo) {
     }
     fflush(stdout);
     pthread_exit(NULL);
+}
+
+static void handle_int(int signo) {
+    puts("Keyboard interrupted");
+    process_defer();
 }
 
 static void handle_pipe(int signo) {
@@ -834,6 +835,7 @@ static void accept_client(int fd) {
             sleep(1);
             continue;
         }
+        pthread_rwlock_unlock(&timers[p].mb);
         #ifdef LISTEN_ON_IPV6
             struct sockaddr_in6 client_addr;
         #else
@@ -860,7 +862,6 @@ static void accept_client(int fd) {
         timer->index = p;
         timer->touch = time(NULL);
         reset_seq(p);
-        pthread_rwlock_unlock(&timer->mb);
         pthread_rwlock_wrlock(&timer->mb);
         timer->isbusy = 1;
         pthread_rwlock_unlock(&timer->mb);
