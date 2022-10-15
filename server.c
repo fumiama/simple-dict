@@ -46,7 +46,7 @@ struct thread_timer_t {
     pthread_cond_t tc;
     pthread_mutex_t tmc;
     uint8_t isbusy;
-    uint8_t buf[CMDPACKET_LEN_MAX];
+    uint8_t buf[BUFSIZ-sizeof(uint32_t)-sizeof(int)-sizeof(time_t)-sizeof(ssize_t)-sizeof(char*)-2*sizeof(pthread_t)-2*sizeof(pthread_cond_t)-2*sizeof(pthread_mutex_t)-sizeof(pthread_rwlock_t)-sizeof(uint8_t)];
 };
 typedef struct thread_timer_t thread_timer_t;
 static thread_timer_t timers[THREADCNT];
@@ -598,6 +598,7 @@ static void accept_timer(void *p) {
             pthread_cond_wait(&timer->tc, &timer->tmc);
             pthread_mutex_unlock(&timer->tmc);
             puts("Timer wake up");
+            sleep(MAXWAITSEC / 4);
         }
         if(is_dict_opening) touch_timer(p);
         time_t waitsec = time(NULL) - timer->touch;
