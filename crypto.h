@@ -99,7 +99,7 @@ static int cmdpacket_encrypt(cmdpacket_t p, int index, const char pwd[64], const
     TEA tea;
     #ifdef DEBUG
         printf("encrypt len: %d, data: ", p->datalen);
-        for(int i = 0; i < p->datalen; i++) printf("%02x", data[i]);
+        for(int i = 0; i < p->datalen; i++) printf("%02x", ((uint8_t*)data)[i]);
         putchar('\n');
     #endif
 
