@@ -631,10 +631,12 @@ static void cleanup_thread(thread_timer_t* timer) {
     }
     close_dict(timer->index);
     timer->thread = 0;
-    timer->isbusy = 0;
     pthread_cond_destroy(&timer->c);
     pthread_mutex_destroy(&timer->mc);
     setdicts[timer->index].data[0] = 0;
+    pthread_rwlock_wrlock(&timer->mb);
+    timer->isbusy = 0;
+    pthread_rwlock_unlock(&timer->mb);
     puts("Finish cleaning");
 }
 
