@@ -627,7 +627,6 @@ static void cleanup_thread(thread_timer_t* timer) {
     timer->isbusy = 0;
     pthread_cond_destroy(&timer->c);
     pthread_mutex_destroy(&timer->mc);
-    pthread_rwlock_destroy(&timer->mb);
     setdicts[timer->index].data[0] = 0;
     puts("Finish cleaning");
 }
@@ -650,27 +649,26 @@ static void handle_pipe(int signo) {
 static void handle_accept(void *p) {
     pthread_cond_init(&timer_pointer_of(p)->c, NULL);
     pthread_mutex_init(&timer_pointer_of(p)->mc, NULL);
-    pthread_rwlock_init(&timer_pointer_of(p)->mb, NULL);
-    pthread_t thread = timer_pointer_of(p)->timerthread;
-    if(!thread || pthread_kill(thread, 0)) {
-        pthread_cond_init(&timer_pointer_of(p)->tc, NULL);
-        pthread_mutex_init(&timer_pointer_of(p)->tmc, NULL);
-        if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
-            perror("Error creating timer thread");
-            cleanup_thread(timer_pointer_of(p));
-            return;
-        }
-        timer_pointer_of(p)->timerthread = thread;
-        puts("Creating timer thread succeeded");
-    } else {
-        pthread_mutex_lock(&timer_pointer_of(p)->tmc);
-        pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
-        pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
-        puts("Waking up timer thread succeeded");
-    }
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
     while(1) {
+        pthread_t thread = timer_pointer_of(p)->timerthread;
+        if(!thread || pthread_kill(thread, 0)) {
+            pthread_cond_init(&timer_pointer_of(p)->tc, NULL);
+            pthread_mutex_init(&timer_pointer_of(p)->tmc, NULL);
+            if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
+                perror("Error creating timer thread");
+                cleanup_thread(timer_pointer_of(p));
+                return;
+            }
+            timer_pointer_of(p)->timerthread = thread;
+            puts("Creating timer thread succeeded");
+        } else {
+            pthread_mutex_lock(&timer_pointer_of(p)->tmc);
+            pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
+            pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
+            puts("Waking up timer thread succeeded");
+        }
         int accept_fd = timer_pointer_of(p)->accept_fd;
         uint32_t index = timer_pointer_of(p)->index;
         uint8_t *buff = timer_pointer_of(p)->buf;
@@ -762,7 +760,6 @@ static void handle_accept(void *p) {
             #endif
         }
         CONV_END: puts("Conversation end");
-        puts("Thread job finished normally");
         pthread_rwlock_wrlock(&timer_pointer_of(p)->mb);
         timer_pointer_of(p)->isbusy = 0;
         pthread_mutex_lock(&timer_pointer_of(p)->mc);
@@ -771,11 +768,6 @@ static void handle_accept(void *p) {
         pthread_cond_wait(&timer_pointer_of(p)->c, &timer_pointer_of(p)->mc);
         pthread_mutex_unlock(&timer_pointer_of(p)->mc);
         puts("Thread wakeup");
-        if(!pthread_kill(thread, 0)) {
-            pthread_mutex_lock(&timer_pointer_of(p)->tmc);
-            pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
-            pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
-        }
     }
     pthread_cleanup_pop(1);
 }
@@ -802,6 +794,7 @@ static void accept_client(int fd) {
     init_crypto();
     init_dict_pool(open_dict(0, 1));
     close_dict(0);
+    for(int i = 0; i < THREADCNT; i++) pthread_rwlock_init(&timers[i].mb, NULL);
     while(1) {
         puts("Ready for accept, waitting...");
         int p = 0;
@@ -836,7 +829,7 @@ static void accept_client(int fd) {
             inet_ntop(AF_INET, &in, str, sizeof(str));
         #endif
         time_t t = time(NULL);
-        printf("\n> %sAccept client %s:%u at slot No.%d\n", ctime(&t), str, port, p);
+        printf("\n> %sAccept client %s:%u at slot No.%d, ", ctime(&t), str, port, p);
         thread_timer_t* timer = &timers[p];
         timer->accept_fd = accept_fd;
         timer->index = p;
@@ -846,7 +839,7 @@ static void accept_client(int fd) {
         pthread_rwlock_wrlock(&timer->mb);
         timer->isbusy = 1;
         pthread_rwlock_unlock(&timer->mb);
-        puts("Set thread status to busy");
+        printf("Set thread status to busy, ");
         if(timer->thread) {
             pthread_mutex_lock(&timer->mc);
             pthread_cond_signal(&timer->c); // wakeup thread
@@ -855,8 +848,8 @@ static void accept_client(int fd) {
         } else if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
             perror("Error creating thread");
             cleanup_thread(timer);
-            continue;
-        } else puts("Creating thread succeeded");
+            putchar('\n');
+        } else puts("Thread created");
     }
 }
 
