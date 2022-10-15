@@ -42,11 +42,12 @@ struct thread_timer_t {
     pthread_t timerthread;
     pthread_cond_t c;
     pthread_mutex_t mc;
-    pthread_rwlock_t mb;
     pthread_cond_t tc;
     pthread_mutex_t tmc;
-    uint8_t isbusy;
-    uint8_t buf[BUFSIZ-sizeof(uint32_t)-sizeof(int)-sizeof(time_t)-sizeof(ssize_t)-sizeof(char*)-2*sizeof(pthread_t)-2*sizeof(pthread_cond_t)-2*sizeof(pthread_mutex_t)-sizeof(pthread_rwlock_t)-sizeof(uint8_t)];
+    pthread_rwlock_t mb;
+    uint8_t isbusy;         // lock by mb
+    uint8_t hastimerslept;  // lock by mb
+    uint8_t buf[BUFSIZ-sizeof(uint32_t)-sizeof(int)-sizeof(time_t)-sizeof(ssize_t)-sizeof(char*)-2*sizeof(pthread_t)-2*sizeof(pthread_cond_t)-2*sizeof(pthread_mutex_t)-sizeof(pthread_rwlock_t)-2*sizeof(uint8_t)];
 };
 typedef struct thread_timer_t thread_timer_t;
 static thread_timer_t timers[THREADCNT];
@@ -594,10 +595,16 @@ static void accept_timer(void *p) {
         pthread_rwlock_unlock(&timer->mb);
         if(!isbusy) {
             pthread_mutex_lock(&timer->tmc);
+            pthread_rwlock_wrlock(&timer->mb);
+            timer->hastimerslept = 1;
+            pthread_rwlock_unlock(&timer->mb);
             puts("Timer sleep");
             pthread_cond_wait(&timer->tc, &timer->tmc);
             pthread_mutex_unlock(&timer->tmc);
             puts("Timer wake up");
+            pthread_rwlock_wrlock(&timer->mb);
+            timer->hastimerslept = 0;
+            pthread_rwlock_unlock(&timer->mb);
             sleep(MAXWAITSEC / 4);
         }
         if(is_dict_opening) touch_timer(p);
@@ -613,6 +620,10 @@ static void accept_timer(void *p) {
         }
         sleep(MAXWAITSEC / 4);
     }
+    pthread_rwlock_wrlock(&timer->mb);
+    timer->timerthread = NULL;
+    timer->hastimerslept = 0;
+    pthread_rwlock_unlock(&timer->mb);
 }
 
 static void cleanup_thread(thread_timer_t* timer) {
@@ -866,10 +877,14 @@ static void accept_client(int fd) {
                 cleanup_thread(timer);
                 putchar('\n');
                 continue;
-            } else puts("Thread created");
+            }
+            puts("Thread created");
         }
         // start or wakeup timer thread
         pthread_t thread = timer->timerthread;
+        pthread_rwlock_rdlock(&timer->mb);
+        uint8_t hastimerslept = timer->hastimerslept;
+        pthread_rwlock_unlock(&timer->mb);
         if(!thread || pthread_kill(thread, 0)) {
             printf("Creating timer thread...");
             pthread_cond_init(&timer->tc, NULL);
@@ -881,7 +896,10 @@ static void accept_client(int fd) {
                 continue;
             }
             puts("succeeded");
-        } else {
+            pthread_rwlock_wrlock(&timer->mb);
+            timer->hastimerslept = 0;
+            pthread_rwlock_unlock(&timer->mb);
+        } else if(hastimerslept) {
             printf("Waking up timer thread...");
             pthread_mutex_lock(&timer->tmc);
             pthread_cond_signal(&timer->tc); // wakeup thread
