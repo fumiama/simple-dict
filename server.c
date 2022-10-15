@@ -657,12 +657,15 @@ static void handle_pipe(int signo) {
 }
 
 static void handle_accept(void *p) {
+    #ifdef DEBUG
+        printf("accept ptr: %p\n", p);
+    #endif
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
     while(1) {
         pthread_t thread = timer_pointer_of(p)->timerthread;
         if(!thread || pthread_kill(thread, 0)) {
-            printf("Creating timer thread...");
+            puts("Creating timer thread...");
             pthread_cond_init(&timer_pointer_of(p)->tc, NULL);
             pthread_mutex_init(&timer_pointer_of(p)->tmc, NULL);
             if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
@@ -674,7 +677,7 @@ static void handle_accept(void *p) {
             timer_pointer_of(p)->timerthread = thread;
             puts("Creating timer thread succeeded");
         } else {
-            printf("Waking up timer thread...");
+            puts("Waking up timer thread...");
             pthread_mutex_lock(&timer_pointer_of(p)->tmc);
             pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
             pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
