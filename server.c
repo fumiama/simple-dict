@@ -576,6 +576,8 @@ static void handle_kill(int signo) {
     puts("Handle sigkill/sigterm");
     for(int i = 0; i < THREADCNT; i++) {
         if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
+        pthread_cond_destroy(&timers[i].tc);
+        pthread_mutex_destroy(&timers[i].tmc);
         if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
     }
     fflush(stdout);
@@ -644,6 +646,8 @@ static void handle_int(int signo) {
     puts("Keyboard interrupted");
     for(int i = 0; i < THREADCNT; i++) {
         if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
+        pthread_cond_destroy(&timers[i].tc);
+        pthread_mutex_destroy(&timers[i].tmc);
         if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
     }
     fflush(stdout);
