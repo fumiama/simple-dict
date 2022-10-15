@@ -657,8 +657,6 @@ static void handle_pipe(int signo) {
 }
 
 static void handle_accept(void *p) {
-    pthread_cond_init(&timer_pointer_of(p)->c, NULL);
-    pthread_mutex_init(&timer_pointer_of(p)->mc, NULL);
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
     while(1) {
@@ -858,11 +856,15 @@ static void accept_client(int fd) {
             pthread_cond_signal(&timer->c); // wakeup thread
             pthread_mutex_unlock(&timer->mc);
             puts("Pick thread from pool");
-        } else if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
-            perror("Error creating thread");
-            cleanup_thread(timer);
-            putchar('\n');
-        } else puts("Thread created");
+        } else {
+            pthread_cond_init(&timer_pointer_of(p)->c, NULL);
+            pthread_mutex_init(&timer_pointer_of(p)->mc, NULL);
+            if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
+                perror("Error creating thread");
+                cleanup_thread(timer);
+                putchar('\n');
+            } else puts("Thread created");
+        }
     }
 }
 
