@@ -557,16 +557,18 @@ static int s5_md5(thread_timer_t *timer) {
 
 static void handle_quit(int signo) {
     puts("Handle sigquit");
+    fflush(stdout);
     pthread_exit(NULL);
 }
 
 static void handle_segv(int signo) {
-    puts("Handle segv");
+    puts("Handle sigsegv");
+    fflush(stdout);
     pthread_exit(NULL);
 }
 
 static void handle_kill(int signo) {
-    puts("Handle kill/term");
+    puts("Handle sigkill/sigterm");
     for(int i = 0; i < THREADCNT; i++) {
         if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
         if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
@@ -594,7 +596,7 @@ static void accept_timer(void *p) {
             puts("Timer sleep");
             pthread_cond_wait(&timer->tc, &timer->tmc);
             pthread_mutex_unlock(&timer->tmc);
-            puts("Timer woke up");
+            puts("Timer wake up");
         }
         if(is_dict_opening) touch_timer(p);
         time_t waitsec = time(NULL) - timer->touch;
@@ -643,6 +645,7 @@ static void handle_int(int signo) {
 
 static void handle_pipe(int signo) {
     puts("Pipe error, exit thread...");
+    fflush(stdout);
     pthread_exit(NULL);
 }
 
@@ -654,16 +657,19 @@ static void handle_accept(void *p) {
     while(1) {
         pthread_t thread = timer_pointer_of(p)->timerthread;
         if(!thread || pthread_kill(thread, 0)) {
+            printf("Creating timer thread...");
             pthread_cond_init(&timer_pointer_of(p)->tc, NULL);
             pthread_mutex_init(&timer_pointer_of(p)->tmc, NULL);
             if (pthread_create(&thread, &attr, (void *)&accept_timer, p)) {
                 perror("Error creating timer thread");
                 cleanup_thread(timer_pointer_of(p));
+                putchar('\n');
                 return;
             }
             timer_pointer_of(p)->timerthread = thread;
             puts("Creating timer thread succeeded");
         } else {
+            printf("Waking up timer thread...");
             pthread_mutex_lock(&timer_pointer_of(p)->tmc);
             pthread_cond_signal(&timer_pointer_of(p)->tc); // wakeup thread
             pthread_mutex_unlock(&timer_pointer_of(p)->tmc);
