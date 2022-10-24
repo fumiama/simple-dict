@@ -612,10 +612,13 @@ static void accept_timer(void *p) {
         }
         sleep(MAXWAITSEC / 4);
     }
-    pthread_mutex_lock(&timer->tmc);
+    pthread_cond_destroy(&timer->tc);
+    printf("Destroy timer cond, ");
+    pthread_mutex_destroy(&timer->tmc);
+    printf("Destroy timer mutex, ");
     timer->timerthread = NULL;
     timer->hastimerslept = 0;
-    pthread_mutex_unlock(&timer->tmc);
+    puts("Clear timer thread");
 }
 
 static void cleanup_thread(thread_timer_t* timer) {
@@ -879,6 +882,7 @@ static void accept_client(int fd) {
             printf("Creating timer thread...");
             pthread_cond_init(&timer->tc, NULL);
             pthread_mutex_init(&timer->tmc, NULL);
+            timer->hastimerslept = 0;
             if (pthread_create(&timer->timerthread, &attr, (void *)&accept_timer, timer)) {
                 perror("Error creating timer thread");
                 cleanup_thread(timer);
@@ -886,9 +890,6 @@ static void accept_client(int fd) {
                 continue;
             }
             puts("succeeded");
-            pthread_mutex_lock(&timer->tmc);
-            timer->hastimerslept = 0;
-            pthread_mutex_unlock(&timer->tmc);
         } else if(hastimerslept) {
             printf("Waking up timer thread...");
             pthread_mutex_lock(&timer->tmc);
