@@ -590,6 +590,7 @@ static void accept_timer(void *p) {
         uint8_t isbusy = timer->isbusy;
         pthread_rwlock_unlock(&timer->mb);
         if(!isbusy) {
+        TIMER_SLEEP:
             pthread_mutex_lock(&timer->tmc);
             timer->hastimerslept = 1;
             puts("Timer sleep");
@@ -608,17 +609,10 @@ static void accept_timer(void *p) {
                 pthread_kill(thread, SIGQUIT);
                 puts("Kill thread");
             }
-            break;
+            goto TIMER_SLEEP;
         }
         sleep(MAXWAITSEC / 4);
     }
-    pthread_cond_destroy(&timer->tc);
-    printf("Destroy timer cond, ");
-    pthread_mutex_destroy(&timer->tmc);
-    printf("Destroy timer mutex, ");
-    timer->timerthread = NULL;
-    timer->hastimerslept = 0;
-    puts("Clear timer thread");
 }
 
 static void cleanup_thread(thread_timer_t* timer) {
@@ -649,8 +643,6 @@ static void cleanup_thread(thread_timer_t* timer) {
 static void process_defer() {
     for(int i = 0; i < THREADCNT; i++) {
         if(timers[i].thread) pthread_kill(timers[i].thread, SIGQUIT);
-        pthread_cond_destroy(&timers[i].tc);
-        pthread_mutex_destroy(&timers[i].tmc);
         if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGQUIT);
     }
     fflush(stdout);
