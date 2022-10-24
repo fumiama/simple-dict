@@ -609,10 +609,11 @@ static void accept_timer(void *p) {
                 pthread_kill(thread, SIGQUIT);
                 puts("Kill thread");
             }
-            goto TIMER_SLEEP;
+            break;
         }
         sleep(MAXWAITSEC / 4);
     }
+    goto TIMER_SLEEP;
 }
 
 static void cleanup_thread(thread_timer_t* timer) {
