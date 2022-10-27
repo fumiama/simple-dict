@@ -581,7 +581,7 @@ static int s5_md5(thread_timer_t *timer) {
 }
 
 static void handle_quit(int signo) {
-    uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
+    uint32_t index = (uint32_t)((uintptr_t)pthread_getspecific(pthread_key_index));
     printf("Handle sigquit@%d\n", index-1);
     fflush(stdout);
     if(index) {
@@ -592,7 +592,7 @@ static void handle_quit(int signo) {
 }
 
 static void handle_segv(int signo) {
-    uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
+    uint32_t index = (uint32_t)((uintptr_t)pthread_getspecific(pthread_key_index));
     printf("Handle sigsegv@%d\n", index-1);
     fflush(stdout);
     if(index) {
@@ -615,7 +615,7 @@ static void handle_int(int signo) {
 }
 
 static void handle_pipe(int signo) {
-    uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
+    uint32_t index = (uint32_t)((uintptr_t)pthread_getspecific(pthread_key_index));
     printf("Pipe error@%d, break loop...\n", index-1);
     fflush(stdout);
     if(index) {
@@ -1002,7 +1002,7 @@ int main(int argc, char *argv[]) {
         perror("fopen");
         return 7;
     }
-    if(~((int)fp)) {
+    if(~((uintptr_t)fp)) {
         uint8_t buf[8+sizeof(config_t)];
         SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
         if(!spb) {
