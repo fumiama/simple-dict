@@ -96,7 +96,6 @@ static void init_dict_pool(FILE *fp);
 static int insert_item(FILE *fp, const dict_t* dict, int keysize, int datasize);
 static inline uint32_t last_nonnull(const char* p, uint32_t max_size);
 static int listen_socket(int fd);
-static void process_defer();
 static int send_all(thread_timer_t *timer);
 static int send_data(int accept_fd, int index, server_ack_t cmd, const char *data, size_t length);
 static int s1_get(thread_timer_t *timer);
@@ -584,6 +583,7 @@ static int s5_md5(thread_timer_t *timer) {
 static void handle_quit(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
     printf("Handle sigquit@%u\n", index);
+    fflush(stdout);
     signal(SIGQUIT, handle_quit);
     longjmp(jmp2convend[index], signo);
 }
@@ -591,23 +591,27 @@ static void handle_quit(int signo) {
 static void handle_segv(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
     printf("Handle sigsegv@%u\n", index);
+    fflush(stdout);
     signal(SIGSEGV, handle_segv);
     longjmp(jmp2convend[index], signo);
 }
 
 static void handle_kill(int signo) {
     puts("Handle sigkill/sigterm");
-    process_defer();
+    fflush(stdout);
+    exit(signo);
 }
 
 static void handle_int(int signo) {
     puts("Keyboard interrupted");
-    process_defer();
+    fflush(stdout);
+    exit(signo);
 }
 
 static void handle_pipe(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
     printf("Pipe error@%u, break loop...\n", index);
+    fflush(stdout);
     signal(SIGPIPE, handle_pipe);
     longjmp(jmp2convend[index], signo);
 }
@@ -699,15 +703,6 @@ static void cleanup_thread(thread_timer_t* timer) {
     pthread_rwlock_unlock(&timer->mb);
 
     puts("Finish cleaning");
-}
-
-static void process_defer() {
-    for(int i = 0; i < THREADCNT; i++) {
-        if(timers[i].thread) pthread_kill(timers[i].thread, SIGUSR1);               // pthread_exit
-        if(timers[i].timerthread) pthread_kill(timers[i].timerthread, SIGUSR1);     // pthread_exit
-    }
-    fflush(stdout);
-    pthread_exit(NULL);
 }
 
 static void handle_accept(void *p) {
@@ -846,7 +841,6 @@ static void accept_client(int fd) {
     signal(SIGSEGV, handle_segv);
     signal(SIGPIPE, handle_pipe);
     signal(SIGTERM, handle_kill);
-    signal(SIGUSR1, (void (*)(int))pthread_exit);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
