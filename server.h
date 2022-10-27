@@ -10,8 +10,11 @@
     #define MAXWAITSEC 8
 #endif
 #ifndef DICTPOOLBIT
-// DICTPOOLBIT must be lower than 4*8 = 32
+    // DICTPOOLBIT must be lower than 4*8 = 32
     #define DICTPOOLBIT 16
+#endif
+#ifndef THREAD_TIMER_T_SZ
+    #define THREAD_TIMER_T_SZ 1024
 #endif
 
 enum server_cmd_t {CMDGET, CMDCAT, CMDMD5, CMDACK, CMDEND, CMDSET, CMDDEL, CMDDAT};
