@@ -626,12 +626,11 @@ static void accept_timer(void *p) {
     sigaddset(&mask, SIGPIPE); // 防止处理嵌套
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
 
-    pthread_rwlock_unlock(&timer->mt);
-
     sleep(MAXWAITSEC / 4);
-    pthread_rwlock_rdlock(&timer->mt);
+
     thread = timer->thread;
     pthread_rwlock_unlock(&timer->mt);
+
     while(thread && !pthread_kill(thread, 0)) {
         pthread_rwlock_rdlock(&timer->mb);
         uint8_t isbusy = timer->isbusy;
@@ -918,6 +917,7 @@ static void accept_client(int fd) {
         } else {
             pthread_cond_init(&timer->c, NULL);
             pthread_mutex_init(&timer->mc, NULL);
+            pthread_rwlock_wrlock(&timers[p].mt);
             if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
                 perror("Error creating thread");
                 cleanup_thread(timer);
