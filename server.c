@@ -27,9 +27,9 @@ struct thread_timer_t {
     time_t touch;           // lock by mt
     ssize_t numbytes;
     char *dat;
-    pthread_rwlock_t mt;    // lock thread&timerthread
-    pthread_t thread;       // lock by mt
-    pthread_t timerthread;  // lock by mt
+    pthread_rwlock_t mt;    // lock touch
+    pthread_t thread;
+    pthread_t timerthread;
     pthread_cond_t c;       // lock by mc
     pthread_mutex_t mc;     // lock c
     pthread_cond_t tc;      // lock by tmc
@@ -622,8 +622,6 @@ static void accept_timer(void *p) {
     sigset_t mask;
     pthread_t thread = timer->thread;
 
-    pthread_rwlock_unlock(&timer->mt);
-
     sigemptyset(&mask);
     sigaddset(&mask, SIGPIPE); // 防止处理嵌套
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
@@ -643,9 +641,7 @@ static void accept_timer(void *p) {
             pthread_mutex_unlock(&timer->tmc);
             printf("Timer@%d wake up\n", timer->index);
             sleep(MAXWAITSEC / 4);
-            pthread_rwlock_rdlock(&timer->mt);
             thread = timer->thread;
-            pthread_rwlock_unlock(&timer->mt);
         }
         if(is_dict_opening) touch_timer(p);
         pthread_rwlock_rdlock(&timer->mt);
@@ -660,9 +656,7 @@ static void accept_timer(void *p) {
             break;
         }
         sleep(MAXWAITSEC / 4);
-        pthread_rwlock_rdlock(&timer->mt);
         thread = timer->thread;
-        pthread_rwlock_unlock(&timer->mt);
     }
     goto TIMER_SLEEP;
 }
@@ -683,10 +677,8 @@ static void cleanup_thread(thread_timer_t* timer) {
 
     close_dict(timer->index);
 
-    pthread_rwlock_wrlock(&timer->mt);
     timer->thread = 0;
     printf("Clear thread, ");
-    pthread_rwlock_unlock(&timer->mt);
 
     pthread_cond_destroy(&timer->c);
     printf("Destroy accept cond, ");
@@ -709,7 +701,6 @@ static void handle_accept(void *p) {
         printf("accept ptr: %p\n", p);
     #endif
     pthread_cleanup_push((void*)&cleanup_thread, p);
-    pthread_rwlock_unlock(&timer_pointer_of(p)->mt);
     puts("Handling accept...");
     pthread_setspecific(pthread_key_index, (void*)((uintptr_t)timer_pointer_of(p)->index));
     if(setjmp(jmp2convend[timer_pointer_of(p)->index])) goto CONV_END;
@@ -900,9 +891,7 @@ static void accept_client(int fd) {
         pthread_rwlock_unlock(&timers[p].mt);
         reset_seq(p);
         // start or wakeup accept thread
-        pthread_rwlock_rdlock(&timers[p].mt);
         pthread_t thread = timer->thread;
-        pthread_rwlock_unlock(&timers[p].mt);
         if(thread) {
             pthread_mutex_lock(&timer->mc);
             pthread_cond_signal(&timer->c); // wakeup thread
@@ -911,7 +900,6 @@ static void accept_client(int fd) {
         } else {
             pthread_cond_init(&timer->c, NULL);
             pthread_mutex_init(&timer->mc, NULL);
-            pthread_rwlock_wrlock(&timers[p].mt);
             if (pthread_create(&timer->thread, &attr, (void *)&handle_accept, timer)) {
                 perror("Error creating thread");
                 cleanup_thread(timer);
@@ -921,18 +909,14 @@ static void accept_client(int fd) {
             puts("Thread created");
         }
         // start or wakeup timer thread
-        pthread_rwlock_rdlock(&timers[p].mt);
         thread = timer->timerthread;
-        pthread_rwlock_unlock(&timers[p].mt);
         if(!thread || pthread_kill(thread, 0)) {
             printf("Creating timer thread...");
             pthread_cond_init(&timer->tc, NULL);
             pthread_mutex_init(&timer->tmc, NULL);
             timer->hastimerslept = 0;
-            pthread_rwlock_wrlock(&timers[p].mt);
             if (pthread_create(&timer->timerthread, &attr, (void *)&accept_timer, timer)) {
                 perror("Error creating timer thread");
-                pthread_rwlock_unlock(&timers[p].mt);
                 cleanup_thread(timer);
                 putchar('\n');
                 continue;
