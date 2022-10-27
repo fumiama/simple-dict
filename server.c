@@ -584,8 +584,10 @@ static void handle_quit(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
     printf("Handle sigquit@%d\n", index-1);
     fflush(stdout);
-    signal(SIGQUIT, handle_quit);
-    if(index) longjmp(jmp2convend[index-1], signo);
+    if(index) {
+        signal(SIGQUIT, handle_quit);
+        longjmp(jmp2convend[index-1], signo);
+    }
     else pthread_exit(NULL);
 }
 
@@ -593,8 +595,10 @@ static void handle_segv(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
     printf("Handle sigsegv@%d\n", index-1);
     fflush(stdout);
-    signal(SIGSEGV, handle_segv);
-    if(index) longjmp(jmp2convend[index-1], signo);
+    if(index) {
+        signal(SIGSEGV, handle_segv);
+        longjmp(jmp2convend[index-1], signo);
+    }
     else pthread_exit(NULL);
 }
 
@@ -614,20 +618,17 @@ static void handle_pipe(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
     printf("Pipe error@%d, break loop...\n", index-1);
     fflush(stdout);
-    signal(SIGPIPE, handle_pipe);
-    if(index) longjmp(jmp2convend[index-1], signo);
+    if(index) {
+        signal(SIGPIPE, handle_pipe);
+        longjmp(jmp2convend[index-1], signo);
+    }
     else pthread_exit(NULL);
 }
 
 static void accept_timer(void *p) {
     thread_timer_t *timer = timer_pointer_of(p);
     uint32_t index = timer->index;
-    sigset_t mask;
     pthread_t thread = timer->thread;
-
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGPIPE); // 防止处理嵌套
-    pthread_sigmask(SIG_BLOCK, &mask, NULL);
 
     sleep(MAXWAITSEC / 4);
     while(thread && !pthread_kill(thread, 0)) {
@@ -665,11 +666,6 @@ static void accept_timer(void *p) {
 }
 
 static void cleanup_thread(thread_timer_t* timer) {
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGPIPE); // 防止处理嵌套
-    pthread_sigmask(SIG_BLOCK, &mask, NULL);
-
     printf("Start cleaning@%d, ", timer->index);
 
     if(timer->accept_fd) {
@@ -705,7 +701,10 @@ static void handle_accept(void *p) {
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
     pthread_setspecific(pthread_key_index, (void*)((uintptr_t)timer_pointer_of(p)->index+1));
-    if(setjmp(jmp2convend[timer_pointer_of(p)->index])) goto CONV_END;
+    if(setjmp(jmp2convend[timer_pointer_of(p)->index])) {
+        printf("Long Jump@%d\n", timer_pointer_of(p)->index);
+        goto CONV_END;
+    }
     while(1) {
         int accept_fd = timer_pointer_of(p)->accept_fd;
         uint32_t index = timer_pointer_of(p)->index;
@@ -834,12 +833,21 @@ static void accept_client(int fd) {
         perror("Error when forking a subprocess");
         sleep(1);
     }*/
-    signal(SIGINT,  handle_int);
-    signal(SIGQUIT, handle_quit);
-    signal(SIGKILL, handle_kill);
-    signal(SIGSEGV, handle_segv);
-    signal(SIGPIPE, handle_pipe);
-    signal(SIGTERM, handle_kill);
+    #ifdef __APPLE__
+        sigaction(SIGINT , &(const struct sigaction){handle_int , 0, 0}, NULL);
+        sigaction(SIGQUIT, &(const struct sigaction){handle_quit, 0, 0}, NULL);
+        sigaction(SIGKILL, &(const struct sigaction){handle_kill, 0, 0}, NULL);
+        sigaction(SIGSEGV, &(const struct sigaction){handle_segv, 0, 0}, NULL);
+        sigaction(SIGPIPE, &(const struct sigaction){handle_pipe, 0, 0}, NULL);
+        sigaction(SIGTERM, &(const struct sigaction){handle_kill, 0, 0}, NULL);
+    #else
+        sigaction(SIGINT , &(const struct sigaction){handle_int , NULL, 0, 0, NULL}, NULL);
+        sigaction(SIGQUIT, &(const struct sigaction){handle_quit, NULL, 0, 0, NULL}, NULL);
+        sigaction(SIGKILL, &(const struct sigaction){handle_kill, NULL, 0, 0, NULL}, NULL);
+        sigaction(SIGSEGV, &(const struct sigaction){handle_segv, NULL, 0, 0, NULL}, NULL);
+        sigaction(SIGPIPE, &(const struct sigaction){handle_pipe, NULL, 0, 0, NULL}, NULL);
+        sigaction(SIGTERM, &(const struct sigaction){handle_kill, NULL, 0, 0, NULL}, NULL);
+    #endif
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
@@ -863,7 +871,7 @@ static void accept_client(int fd) {
             sleep(1);
             continue;
         }
-        printf("Ready for accept on slot No.%d, ", p);
+        printf("Ready for accept on slot No.%d\n", p);
         thread_timer_t* timer = &timers[p];
         pthread_rwlock_unlock(&timer->mb);
         #ifdef LISTEN_ON_IPV6
@@ -872,7 +880,7 @@ static void accept_client(int fd) {
             struct sockaddr_in client_addr;
         #endif
         int accept_fd;
-        while((accept_fd=accept(fd, (struct sockaddr *)&client_addr, &struct_len))<=0) {
+        if((accept_fd=accept(fd, (struct sockaddr *)&client_addr, &struct_len))<=0) {
             perror("Accept client error");
             continue;
         }
@@ -900,7 +908,7 @@ static void accept_client(int fd) {
         reset_seq(p);
         // start or wakeup accept thread
         pthread_t thread = timer->thread;
-        if(thread) {
+        if(thread && !pthread_kill(thread, 0)) {
             pthread_mutex_lock(&timer->mc);
             pthread_cond_signal(&timer->c); // wakeup thread
             pthread_mutex_unlock(&timer->mc);
