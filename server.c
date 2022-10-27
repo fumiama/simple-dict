@@ -833,21 +833,12 @@ static void accept_client(int fd) {
         perror("Error when forking a subprocess");
         sleep(1);
     }*/
-    #if defined __USE_POSIX199309 || __APPLE__
-        sigaction(SIGINT , &(const struct sigaction){handle_int , 0, 0}, NULL);
-        sigaction(SIGQUIT, &(const struct sigaction){handle_quit, 0, 0}, NULL);
-        sigaction(SIGKILL, &(const struct sigaction){handle_kill, 0, 0}, NULL);
-        sigaction(SIGSEGV, &(const struct sigaction){handle_segv, 0, 0}, NULL);
-        sigaction(SIGPIPE, &(const struct sigaction){handle_pipe, 0, 0}, NULL);
-        sigaction(SIGTERM, &(const struct sigaction){handle_kill, 0, 0}, NULL);
-    #else
-        sigaction(SIGINT , &(const struct sigaction){handle_int , NULL, 0, 0, NULL}, NULL);
-        sigaction(SIGQUIT, &(const struct sigaction){handle_quit, NULL, 0, 0, NULL}, NULL);
-        sigaction(SIGKILL, &(const struct sigaction){handle_kill, NULL, 0, 0, NULL}, NULL);
-        sigaction(SIGSEGV, &(const struct sigaction){handle_segv, NULL, 0, 0, NULL}, NULL);
-        sigaction(SIGPIPE, &(const struct sigaction){handle_pipe, NULL, 0, 0, NULL}, NULL);
-        sigaction(SIGTERM, &(const struct sigaction){handle_kill, NULL, 0, 0, NULL}, NULL);
-    #endif
+    sigaction(SIGINT , &(const struct sigaction){handle_int}, NULL);
+    sigaction(SIGQUIT, &(const struct sigaction){handle_quit}, NULL);
+    sigaction(SIGKILL, &(const struct sigaction){handle_kill}, NULL);
+    sigaction(SIGSEGV, &(const struct sigaction){handle_segv}, NULL);
+    sigaction(SIGPIPE, &(const struct sigaction){handle_pipe}, NULL);
+    sigaction(SIGTERM, &(const struct sigaction){handle_kill}, NULL);
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     init_crypto();
