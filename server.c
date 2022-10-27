@@ -626,6 +626,8 @@ static void accept_timer(void *p) {
     sigaddset(&mask, SIGPIPE); // 防止处理嵌套
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
 
+    pthread_rwlock_unlock(&timer->mt);
+
     sleep(MAXWAITSEC / 4);
     pthread_rwlock_rdlock(&timer->mt);
     thread = timer->thread;
@@ -710,6 +712,7 @@ static void handle_accept(void *p) {
         printf("accept ptr: %p\n", p);
     #endif
     pthread_cleanup_push((void*)&cleanup_thread, p);
+    pthread_rwlock_unlock(&timer_pointer_of(p)->mt);
     puts("Handling accept...");
     pthread_setspecific(pthread_key_index, (void*)((uintptr_t)timer_pointer_of(p)->index));
     if(setjmp(jmp2convend[timer_pointer_of(p)->index])) goto CONV_END;
@@ -932,8 +935,10 @@ static void accept_client(int fd) {
             pthread_cond_init(&timer->tc, NULL);
             pthread_mutex_init(&timer->tmc, NULL);
             timer->hastimerslept = 0;
+            pthread_rwlock_wrlock(&timers[p].mt);
             if (pthread_create(&timer->timerthread, &attr, (void *)&accept_timer, timer)) {
                 perror("Error creating timer thread");
+                pthread_rwlock_unlock(&timers[p].mt);
                 cleanup_thread(timer);
                 putchar('\n');
                 continue;
