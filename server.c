@@ -796,19 +796,25 @@ static void handle_accept(void *p) {
             #endif
         }
         CONV_END: puts("Conversation end");
+
         if(timer_pointer_of(p)->accept_fd) {
             close(timer_pointer_of(p)->accept_fd);
             timer_pointer_of(p)->accept_fd = 0;
             puts("Close accept");
         }
+
         close_dict(timer_pointer_of(p)->index);
         setdicts[timer_pointer_of(p)->index].data[0] = 0;
+
+        pthread_mutex_lock(&timer_pointer_of(p)->mc);
+
         pthread_rwlock_wrlock(&timer_pointer_of(p)->mb);
         timer_pointer_of(p)->isbusy = 0;
-        pthread_mutex_lock(&timer_pointer_of(p)->mc);
         pthread_rwlock_unlock(&timer_pointer_of(p)->mb);
+
         puts("Set thread status to idle");
         pthread_cond_wait(&timer_pointer_of(p)->c, &timer_pointer_of(p)->mc);
+    
         pthread_mutex_unlock(&timer_pointer_of(p)->mc);
         puts("Thread wakeup");
     }
