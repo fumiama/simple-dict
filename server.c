@@ -833,7 +833,7 @@ static void accept_client(int fd) {
         perror("Error when forking a subprocess");
         sleep(1);
     }*/
-    #ifdef __APPLE__
+    #if defined __USE_POSIX199309 || __APPLE__
         sigaction(SIGINT , &(const struct sigaction){handle_int , 0, 0}, NULL);
         sigaction(SIGQUIT, &(const struct sigaction){handle_quit, 0, 0}, NULL);
         sigaction(SIGKILL, &(const struct sigaction){handle_kill, 0, 0}, NULL);
