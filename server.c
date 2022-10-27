@@ -79,7 +79,7 @@ static pthread_attr_t attr;
 static dict_t* dict_pool[DICTPOOLSZ+1];
 
 static pthread_key_t pthread_key_index;
-static jmp_buf jmp2convend[THREADCNT];
+static sigjmp_buf jmp2convend[THREADCNT];
 
 static void accept_client(int fd);
 static void accept_timer(void *p);
@@ -586,7 +586,7 @@ static void handle_quit(int signo) {
     fflush(stdout);
     if(index) {
         signal(SIGQUIT, handle_quit);
-        longjmp(jmp2convend[index-1], signo);
+        siglongjmp(jmp2convend[index-1], signo);
     }
     else pthread_exit(NULL);
 }
@@ -597,7 +597,7 @@ static void handle_segv(int signo) {
     fflush(stdout);
     if(index) {
         signal(SIGSEGV, handle_segv);
-        longjmp(jmp2convend[index-1], signo);
+        siglongjmp(jmp2convend[index-1], signo);
     }
     else pthread_exit(NULL);
 }
@@ -620,7 +620,7 @@ static void handle_pipe(int signo) {
     fflush(stdout);
     if(index) {
         signal(SIGPIPE, handle_pipe);
-        longjmp(jmp2convend[index-1], signo);
+        siglongjmp(jmp2convend[index-1], signo);
     }
     else pthread_exit(NULL);
 }
@@ -701,7 +701,7 @@ static void handle_accept(void *p) {
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
     pthread_setspecific(pthread_key_index, (void*)((uintptr_t)timer_pointer_of(p)->index+1));
-    if(setjmp(jmp2convend[timer_pointer_of(p)->index])) {
+    if(sigsetjmp(jmp2convend[timer_pointer_of(p)->index], 1)) {
         printf("Long Jump@%d\n", timer_pointer_of(p)->index);
         goto CONV_END;
     }
