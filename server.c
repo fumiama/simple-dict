@@ -585,7 +585,8 @@ static void handle_quit(int signo) {
     printf("Handle sigquit@%u\n", index);
     fflush(stdout);
     signal(SIGQUIT, handle_quit);
-    longjmp(jmp2convend[index], signo);
+    if(index) longjmp(jmp2convend[index-1], signo);
+    else pthread_exit(NULL);
 }
 
 static void handle_segv(int signo) {
@@ -593,7 +594,8 @@ static void handle_segv(int signo) {
     printf("Handle sigsegv@%u\n", index);
     fflush(stdout);
     signal(SIGSEGV, handle_segv);
-    longjmp(jmp2convend[index], signo);
+    if(index) longjmp(jmp2convend[index-1], signo);
+    else pthread_exit(NULL);
 }
 
 static void handle_kill(int signo) {
@@ -613,7 +615,8 @@ static void handle_pipe(int signo) {
     printf("Pipe error@%u, break loop...\n", index);
     fflush(stdout);
     signal(SIGPIPE, handle_pipe);
-    longjmp(jmp2convend[index], signo);
+    if(index) longjmp(jmp2convend[index-1], signo);
+    else pthread_exit(NULL);
 }
 
 static void accept_timer(void *p) {
@@ -676,6 +679,7 @@ static void cleanup_thread(thread_timer_t* timer) {
     }
 
     close_dict(timer->index);
+    setdicts[timer->index].data[0] = 0;
 
     timer->thread = 0;
     printf("Clear thread, ");
@@ -685,8 +689,6 @@ static void cleanup_thread(thread_timer_t* timer) {
 
     pthread_mutex_destroy(&timer->mc);
     printf("Destroy accept mutex, ");
-
-    setdicts[timer->index].data[0] = 0;
 
     pthread_rwlock_wrlock(&timer->mb);
     timer->isbusy = 0;
@@ -702,7 +704,7 @@ static void handle_accept(void *p) {
     #endif
     pthread_cleanup_push((void*)&cleanup_thread, p);
     puts("Handling accept...");
-    pthread_setspecific(pthread_key_index, (void*)((uintptr_t)timer_pointer_of(p)->index));
+    pthread_setspecific(pthread_key_index, (void*)((uintptr_t)timer_pointer_of(p)->index+1));
     if(setjmp(jmp2convend[timer_pointer_of(p)->index])) goto CONV_END;
     while(1) {
         int accept_fd = timer_pointer_of(p)->accept_fd;
