@@ -582,7 +582,7 @@ static int s5_md5(thread_timer_t *timer) {
 
 static void handle_quit(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
-    printf("Handle sigquit@%u\n", index);
+    printf("Handle sigquit@%d\n", index-1);
     fflush(stdout);
     signal(SIGQUIT, handle_quit);
     if(index) longjmp(jmp2convend[index-1], signo);
@@ -591,7 +591,7 @@ static void handle_quit(int signo) {
 
 static void handle_segv(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
-    printf("Handle sigsegv@%u\n", index);
+    printf("Handle sigsegv@%d\n", index-1);
     fflush(stdout);
     signal(SIGSEGV, handle_segv);
     if(index) longjmp(jmp2convend[index-1], signo);
@@ -612,7 +612,7 @@ static void handle_int(int signo) {
 
 static void handle_pipe(int signo) {
     uint32_t index = (uint32_t)(pthread_getspecific(pthread_key_index));
-    printf("Pipe error@%u, break loop...\n", index);
+    printf("Pipe error@%d, break loop...\n", index-1);
     fflush(stdout);
     signal(SIGPIPE, handle_pipe);
     if(index) longjmp(jmp2convend[index-1], signo);
