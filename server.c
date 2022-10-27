@@ -620,17 +620,15 @@ static void accept_timer(void *p) {
     thread_timer_t *timer = timer_pointer_of(p);
     uint32_t index = timer->index;
     sigset_t mask;
-    pthread_t thread;
+    pthread_t thread = timer->thread;
+
+    pthread_rwlock_unlock(&timer->mt);
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGPIPE); // 防止处理嵌套
     pthread_sigmask(SIG_BLOCK, &mask, NULL);
 
     sleep(MAXWAITSEC / 4);
-
-    thread = timer->thread;
-    pthread_rwlock_unlock(&timer->mt);
-
     while(thread && !pthread_kill(thread, 0)) {
         pthread_rwlock_rdlock(&timer->mb);
         uint8_t isbusy = timer->isbusy;
@@ -869,10 +867,6 @@ static void accept_client(int fd) {
         printf("Ready for accept on slot No.%d, ", p);
         thread_timer_t* timer = &timers[p];
         pthread_rwlock_unlock(&timer->mb);
-        pthread_rwlock_wrlock(&timer->mb);
-        timer->isbusy = 1;
-        pthread_rwlock_unlock(&timer->mb);
-        puts("Set thread status to busy, waitting...");
         #ifdef LISTEN_ON_IPV6
             struct sockaddr_in6 client_addr;
         #else
@@ -881,11 +875,11 @@ static void accept_client(int fd) {
         int accept_fd;
         while((accept_fd=accept(fd, (struct sockaddr *)&client_addr, &struct_len))<=0) {
             perror("Accept client error");
-            pthread_rwlock_wrlock(&timer->mb);
-            timer->isbusy = 0;
-            pthread_rwlock_unlock(&timer->mb);
             continue;
         }
+        pthread_rwlock_wrlock(&timer->mb);
+        timer->isbusy = 1;
+        pthread_rwlock_unlock(&timer->mb);
         #ifdef LISTEN_ON_IPV6
             uint16_t port = ntohs(client_addr.sin6_port);
             struct in6_addr in = client_addr.sin6_addr;
