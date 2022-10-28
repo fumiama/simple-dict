@@ -585,7 +585,7 @@ static void handle_quit(int signo) {
     printf("Handle sigquit@%d\n", index-1);
     fflush(stdout);
     if(index) {
-        signal(SIGQUIT, handle_quit);
+        sigaction(SIGQUIT, &(const struct sigaction){handle_quit}, NULL);
         siglongjmp(jmp2convend[index-1], signo);
     }
     else pthread_exit(NULL);
@@ -596,7 +596,7 @@ static void handle_segv(int signo) {
     printf("Handle sigsegv@%d\n", index-1);
     fflush(stdout);
     if(index) {
-        signal(SIGSEGV, handle_segv);
+        sigaction(SIGSEGV, &(const struct sigaction){handle_segv}, NULL);
         siglongjmp(jmp2convend[index-1], signo);
     }
     else pthread_exit(NULL);
@@ -619,7 +619,7 @@ static void handle_pipe(int signo) {
     printf("Pipe error@%d, break loop...\n", index-1);
     fflush(stdout);
     if(index) {
-        signal(SIGPIPE, handle_pipe);
+        sigaction(SIGPIPE, &(const struct sigaction){handle_pipe}, NULL);
         siglongjmp(jmp2convend[index-1], signo);
     }
     else pthread_exit(NULL);
