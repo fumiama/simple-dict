@@ -402,7 +402,10 @@ ERR_INSERT_ITEM:
 }
 
 static int s3_set_data(thread_timer_t *timer) {
-    if(!setdicts[timer->index].data[0]) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    if(is_empty_md5((uint64_t*)setdicts[timer->index].data)) {
+        puts("Set data error: key md5 is empty");
+        return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    }
     FILE *fp = open_dict(timer->index, 0);
     if(fp == NULL) return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
 
@@ -410,8 +413,10 @@ static int s3_set_data(thread_timer_t *timer) {
     #ifdef DEBUG
         printf("Set data size: %u\n", datasize);
     #endif
-    if(datasize <= 0 || datasize > sizeof(setdicts[timer->index].data)) 
+    if(datasize <= 0 || datasize > sizeof(setdicts[timer->index].data)) {
+        puts("Set data error: invalid datasize");
         return send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
+    }
 
     int r;
     pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
@@ -452,7 +457,7 @@ static int s3_set_data(thread_timer_t *timer) {
     memcpy(setdict->data, timer->dat, timer->numbytes);
 
     if(insert_item(fp, setdict, strlen(setdict->key)+1, datasize)) {
-        fprintf(stderr, "Error set data: dict[%s]=%s\n", setdict->key, timer->dat);
+        fprintf(stderr, "Error setting data: dict[%s]=%s\n", setdict->key, timer->dat);
         r = send_data(timer->accept_fd, timer->index, ACKERRO, "erro", 4);
     } else {
         printf("Set dict[%s]=%s\n", setdict->key, timer->dat);

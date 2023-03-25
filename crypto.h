@@ -37,17 +37,27 @@ static const uint32_t sumtable[0x10] = CRYPTO_SUMTABLE;
 
 static uint8_t seqs[THREADCNT]; // 消息序号
 
-static inline int is_md5_equal(uint8_t* digest, uint8_t* digest2) {
-    #ifdef CPUBIT64
-        return (digest[0] == digest2[0]) &&
-                (digest[1] == digest2[1]);
-    #else
-        return (digest[0] == digest2[0]) &&
-                (digest[1] == digest2[1]) &&
-                (digest[2] == digest2[2]) &&
-                (digest[3] == digest2[3]);
-    #endif
+#ifdef CPUBIT64
+static inline int is_md5_equal(uint64_t* digest, uint64_t* digest2) {
+    return (digest[0] == digest2[0]) && (digest[1] == digest2[1]);
 }
+static inline int is_empty_md5(uint64_t* digest) {
+    return (digest[0] == (uint64_t)0) && (digest[1] == (uint64_t)0);
+}
+#else
+static inline int is_md5_equal(uint32_t* digest, uint32_t* digest2) {
+    return (digest[0] == digest2[0]) &&
+            (digest[1] == digest2[1]) &&
+            (digest[2] == digest2[2]) &&
+            (digest[3] == digest2[3]);
+}
+static inline int is_empty_md5(uint32_t* digest) {
+    return (digest[0] == (uint32_t)0) &&
+            (digest[1] == (uint32_t)0) &&
+            (digest[2] == (uint32_t)0) &&
+            (digest[3] == (uint32_t)0);
+}
+#endif
 
 static void init_crypto() {
     srand(time(NULL));
@@ -173,7 +183,7 @@ static int cmdpacket_decrypt(cmdpacket_t p, int index, const char pwd[64]) {
         putchar('\n');
     #endif
 
-    if(is_md5_equal((uint8_t*)datamd5, p->md5)) {
+    if(is_md5_equal((uint64_t*)datamd5, (uint64_t*)p->md5)) {
         seqs[index]++;
         memcpy(p->data, out, p->datalen);
         return 0;
