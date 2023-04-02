@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.0)
 project(simple-dict-server C)
 SET(CMAKE_BUILD_TYPE "Release")
 
@@ -49,12 +49,14 @@ message(STATUS "optional:-std=gnu99")
 add_executable(simple-dict-server server.c)
 add_executable(simple-dict-client client.c)
 add_executable(cfgwriter cfgwriter.c)
+add_executable(printall printall.c)
 #add_executable(migrate migrate.c)
 #add_executable(migratenew migratenew.c)
 
 target_link_libraries(simple-dict-server scrypto libspb.a pthread)
 target_link_libraries(simple-dict-client scrypto libspb.a pthread)
 target_link_libraries(cfgwriter libspb.a)
+target_link_libraries(printall libspb.a)
 
 #target_link_libraries(migrate libspb.a)
 #target_link_libraries(migratenew libspb.a)
