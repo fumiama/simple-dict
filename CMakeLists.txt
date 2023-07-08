@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 2.8.12)
 project(simple-dict-server C)
 SET(CMAKE_BUILD_TYPE "Release")
 
