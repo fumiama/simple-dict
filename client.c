@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {   // usage: ./client cfg.sp host port
         perror("fopen");
         return 1;
     }
-    SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
+    simple_pb_t* spb = read_pb_into(fp, (simple_pb_t*)buf);
     if(!spb) {
         fprintf(stderr, "Error reading config file: %s\n", argv[1]);
         return 2;

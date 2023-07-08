@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
             int ch;
 
             while(has_next(old, ch)) {
-                SIMPLE_PB* spb = get_pb(old);
+                simple_pb_t* spb = get_pb(old);
                 DICTNEW* d;
                 switch(spb->struct_len) {
                     case sizeof(DICTOLD):

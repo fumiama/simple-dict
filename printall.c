@@ -18,7 +18,7 @@ int main(int argc, char** argv) {
             int ch;
 
             while(has_next(f, ch)) {
-                SIMPLE_PB* spb = read_pb_into(f, (SIMPLE_PB*)buf);
+                simple_pb_t* spb = read_pb_into(f, (simple_pb_t*)buf);
                 struct dict_t* d;
                 if(!spb) {
                     fputs("Bad spb file", stderr);

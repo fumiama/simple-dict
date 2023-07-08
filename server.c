@@ -223,7 +223,7 @@ static void init_dict_pool(FILE *fp) {
     int ch;
     while(has_next(fp, ch)) {
         if(!ch) continue; // skip null bytes
-        SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
+        simple_pb_t* spb = read_pb_into(fp, (simple_pb_t*)buf);
         if(!spb) {
             fputs("Bad spb file", stderr);
             exit(EXIT_FAILURE);
@@ -308,7 +308,7 @@ static int s1_get(thread_timer_t *timer) {
         pthread_cleanup_push((void*)&close_dict, (void*)(uintptr_t)timer->index);
         while(has_next(fp, ch)) {
             if(!ch) continue; // skip null bytes
-            SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
+            simple_pb_t* spb = read_pb_into(fp, (simple_pb_t*)buf);
             if(!spb) continue; // skip error bytes
             dict_t* d = (dict_t*)spb->target;
             if(!strcmp(timer->dat, d->key)) {
@@ -338,7 +338,7 @@ static int insert_item(FILE *fp, const dict_t* dict, int keysize, int datasize) 
     uint8_t buf[8+DICTSZ];
     while(has_next(fp, ch)) {
         if(!ch) continue; // skip null bytes
-        SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
+        simple_pb_t* spb = read_pb_into(fp, (simple_pb_t*)buf);
         if(!spb) {
             fputs("Bad spb file", stderr);
             pthread_exit(NULL);
@@ -475,7 +475,7 @@ static server_ack_t del(FILE *fp, const char* key, int len, char ret[4]) {
     uint8_t buf[8+DICTSZ];
     while(has_next(fp, ch)) {
         if(!ch) continue; // skip null bytes
-        SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
+        simple_pb_t* spb = read_pb_into(fp, (simple_pb_t*)buf);
         if(!spb)  {
             fputs("Bad spb file", stderr);
             pthread_exit(NULL);
@@ -1009,7 +1009,7 @@ int main(int argc, char *argv[]) {
     }
     if(~((uintptr_t)fp)) {
         uint8_t buf[8+sizeof(config_t)];
-        SIMPLE_PB* spb = read_pb_into(fp, (SIMPLE_PB*)buf);
+        simple_pb_t* spb = read_pb_into(fp, (simple_pb_t*)buf);
         if(!spb) {
             fprintf(stderr, "Error reading config file: %s\n", argv[as_daemon?4:3]);
             return 8;
