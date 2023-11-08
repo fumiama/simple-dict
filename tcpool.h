@@ -77,9 +77,9 @@ struct tcpool_thread_timer_t {
     pthread_cond_t tc;      // lock by tmc
     pthread_mutex_t tmc;    // lock tc&hastimerslept
     pthread_rwlock_t mb;    // lock isbusy
+    TCPOOL_THREAD_CONTEXT;
     uint8_t isbusy;         // lock by mb
     uint8_t hastimerslept;  // lock by tmc
-    TCPOOL_THREAD_CONTEXT;
 };
 typedef struct tcpool_thread_timer_t tcpool_thread_timer_t;
 
