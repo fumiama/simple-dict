@@ -8,8 +8,6 @@
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
-#include <simple_protobuf.h>
-#include <simplecrypto.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
