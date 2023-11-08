@@ -22,6 +22,18 @@
     #define TCPOOL_THREAD_TIMER_T_SZ 1024
 #endif
 
+#define TCPOOL_THREAD_TIMER_T_HEAD_SZ ( \
+        sizeof(uint32_t)   \
+        +sizeof(int)        \
+        +sizeof(time_t)     \
+        +sizeof(pthread_rwlock_t)   \
+        +2*sizeof(pthread_t)        \
+        +2*sizeof(pthread_cond_t)   \
+        +2*sizeof(pthread_mutex_t)  \
+        +sizeof(pthread_rwlock_t)   \
+        +2*sizeof(uint8_t)          \
+    )
+
 #ifndef TCPOOL_THREADCNT
     #define TCPOOL_THREADCNT 32
 #endif
@@ -32,16 +44,8 @@
 
 #ifndef TCPOOL_THREAD_CONTEXT
     #define TCPOOL_THREAD_CONTEXT uint8_t __padding[  \
-        TCPOOL_THREAD_TIMER_T_SZ   \
-        -sizeof(uint32_t)   \
-        -sizeof(int)        \
-        -sizeof(time_t)     \
-        -sizeof(pthread_rwlock_t)   \
-        -2*sizeof(pthread_t)        \
-        -2*sizeof(pthread_cond_t)   \
-        -2*sizeof(pthread_mutex_t)  \
-        -sizeof(pthread_rwlock_t)   \
-        -2*sizeof(uint8_t)          \
+        TCPOOL_THREAD_TIMER_T_SZ        \
+        -TCPOOL_THREAD_TIMER_T_HEAD_SZ  \
     ]
 #endif
 
