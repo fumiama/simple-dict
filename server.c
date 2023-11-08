@@ -30,15 +30,16 @@ static inline uint32_t last_nonnull(const char* p, uint32_t max_size);
 #define TCPOOL_THREAD_TIMER_T_SZ THREAD_TIMER_T_SZ
 #define TCPOOL_THREADCNT THREADCNT
 #define TCPOOL_MAXWAITSEC MAXWAITSEC
-#define TCPOOL_THREAD_CONTEXT   \
-    ssize_t numbytes;           \
-    char *dat;                  \
-    uint8_t buf[                    \
-        TCPOOL_THREAD_TIMER_T_SZ    \
+#define SERVER_THREAD_BUFSZ (   \
+    TCPOOL_THREAD_TIMER_T_SZ    \
         -TCPOOL_THREAD_TIMER_T_HEAD_SZ  \
         -sizeof(ssize_t)    \
         -sizeof(char*)      \
-    ]
+    )
+#define TCPOOL_THREAD_CONTEXT   \
+    ssize_t numbytes;           \
+    char *dat;                  \
+    uint8_t buf[SERVER_THREAD_BUFSZ]
 
 static dict_t setdicts[THREADCNT];
 static uint32_t* items_len;
